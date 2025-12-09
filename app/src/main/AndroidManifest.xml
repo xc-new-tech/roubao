@@ -23,6 +23,37 @@
     <!-- 屏幕常亮 -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- 查询所有已安装应用 (Android 11+) -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+
+    <!-- 声明需要查询的应用和 Intent -->
+    <queries>
+        <!-- 查询所有可启动的应用 -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <!-- 查询 VIEW intent (DeepLink) -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="*" />
+        </intent>
+        <!-- 小美 DeepLink -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="beam" />
+        </intent>
+        <!-- 美团 -->
+        <package android:name="com.sankuai.meituan" />
+        <package android:name="com.meituan.android.beam" />
+        <!-- 饿了么 -->
+        <package android:name="me.ele" />
+        <!-- 大众点评 -->
+        <package android:name="com.dianping.v1" />
+    </queries>
+
     <application
         android:name=".App"
         android:allowBackup="true"

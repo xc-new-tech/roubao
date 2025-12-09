@@ -9,6 +9,9 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -16,41 +19,46 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.roubao.autopilot.ui.theme.BaoziTheme
 import com.roubao.autopilot.ui.theme.Primary
-import com.roubao.autopilot.ui.theme.Secondary
 import kotlinx.coroutines.launch
 
 data class OnboardingPage(
-    val emoji: String,
+    val icon: ImageVector,
     val title: String,
-    val description: String
+    val description: String,
+    val iconColor: Color = Primary
 )
 
 val onboardingPages = listOf(
     OnboardingPage(
-        emoji = "🍞",
+        icon = Icons.Outlined.Star,
         title = "欢迎使用肉包",
-        description = "肉包是一个智能自动化助手，\n可以帮你操作手机完成各种任务"
+        description = "肉包是一个智能自动化助手，\n可以帮你操作手机完成各种任务",
+        iconColor = Color(0xFF6366F1) // Indigo
     ),
     OnboardingPage(
-        emoji = "🤖",
+        icon = Icons.Outlined.Settings,
         title = "AI 驱动",
-        description = "基于先进的视觉语言模型，\n肉包能够理解屏幕内容并做出智能决策"
+        description = "基于先进的视觉语言模型，\n肉包能够理解屏幕内容并做出智能决策",
+        iconColor = Color(0xFF8B5CF6) // Violet
     ),
     OnboardingPage(
-        emoji = "🚀",
+        icon = Icons.Outlined.Home,
         title = "简单易用",
-        description = "只需用自然语言描述你想做的事，\n肉包会自动帮你完成"
+        description = "只需用自然语言描述你想做的事，\n肉包会自动帮你完成",
+        iconColor = Color(0xFF06B6D4) // Cyan
     ),
     OnboardingPage(
-        emoji = "🔒",
+        icon = Icons.Filled.Lock,
         title = "安全可靠",
-        description = "遇到敏感页面（如支付、密码）会自动停止，\n保护你的账户安全"
+        description = "遇到敏感页面（如支付、密码）会自动停止，\n保护你的账户安全",
+        iconColor = Color(0xFF10B981) // Emerald
     )
 )
 
@@ -179,13 +187,13 @@ fun OnboardingPageContent(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        // 动画 Emoji
-        val infiniteTransition = rememberInfiniteTransition(label = "emoji")
+        // 动画图标
+        val infiniteTransition = rememberInfiniteTransition(label = "icon")
         val scale by infiniteTransition.animateFloat(
             initialValue = 1f,
-            targetValue = 1.1f,
+            targetValue = 1.08f,
             animationSpec = infiniteRepeatable(
-                animation = tween(1000, easing = EaseInOutSine),
+                animation = tween(1200, easing = EaseInOutSine),
                 repeatMode = RepeatMode.Reverse
             ),
             label = "scale"
@@ -198,16 +206,19 @@ fun OnboardingPageContent(
                 .background(
                     Brush.radialGradient(
                         colors = listOf(
-                            Primary.copy(alpha = 0.2f),
+                            page.iconColor.copy(alpha = 0.15f),
+                            page.iconColor.copy(alpha = 0.05f),
                             colors.background.copy(alpha = 0f)
                         )
                     )
                 ),
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                text = page.emoji,
-                fontSize = (80 * scale).sp
+            Icon(
+                imageVector = page.icon,
+                contentDescription = page.title,
+                modifier = Modifier.size((72 * scale).dp),
+                tint = page.iconColor
             )
         }
 

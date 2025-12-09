@@ -57,6 +57,9 @@ class MainActivity : ComponentActivity() {
     private val mobileAgent = mutableStateOf<MobileAgent?>(null)
     private var shizukuAvailable = mutableStateOf(false)
 
+    // 当前执行的协程 Job（用于停止任务）
+    private var currentExecutionJob: kotlinx.coroutines.Job? = null
+
     // 执行记录列表
     private val executionRecords = mutableStateOf<List<ExecutionRecord>>(emptyList())
 
@@ -398,6 +401,12 @@ class MainActivity : ComponentActivity() {
 
         mobileAgent.value = MobileAgent(vlmClient, deviceController, this)
 
+        // 设置停止回调，用于取消协程
+        mobileAgent.value?.onStopRequested = {
+            currentExecutionJob?.cancel()
+            currentExecutionJob = null
+        }
+
         // 创建执行记录
         val record = ExecutionRecord(
             title = generateTitle(instruction),
@@ -406,7 +415,10 @@ class MainActivity : ComponentActivity() {
             status = ExecutionStatus.RUNNING
         )
 
-        lifecycleScope.launch {
+        // 取消之前的任务（如果有）
+        currentExecutionJob?.cancel()
+
+        currentExecutionJob = lifecycleScope.launch {
             // 保存初始记录
             executionRepository.saveRecord(record)
             executionRecords.value = executionRepository.getAllRecords()
@@ -432,6 +444,24 @@ class MainActivity : ComponentActivity() {
                 // 延迟3秒后清空日志，恢复默认状态
                 kotlinx.coroutines.delay(3000)
                 mobileAgent.value?.clearLogs()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // 用户取消任务
+                val agentState = mobileAgent.value?.state?.value
+                val steps = agentState?.executionSteps ?: emptyList()
+
+                val updatedRecord = record.copy(
+                    endTime = System.currentTimeMillis(),
+                    status = ExecutionStatus.STOPPED,
+                    steps = steps,
+                    resultMessage = "用户停止"
+                )
+                executionRepository.saveRecord(updatedRecord)
+                executionRecords.value = executionRepository.getAllRecords()
+
+                Toast.makeText(this@MainActivity, "任务已停止", Toast.LENGTH_SHORT).show()
+                mobileAgent.value?.clearLogs()
+                // 重新抛出取消异常（协程规范）
+                throw e
             } catch (e: Exception) {
                 // 更新失败记录
                 val updatedRecord = record.copy(

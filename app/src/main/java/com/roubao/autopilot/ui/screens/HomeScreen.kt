@@ -26,6 +26,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -53,6 +55,7 @@ val presetCommands = listOf(
     PresetCommand("📱", "发消息", "帮我给最近联系人发一条消息说在忙")
 )
 
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 fun HomeScreen(
     agentState: AgentState?,
@@ -67,6 +70,20 @@ fun HomeScreen(
     var inputText by remember { mutableStateOf("") }
     val isRunning = agentState?.isRunning == true
     val listState = rememberLazyListState()
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+
+    // 记录上一次的运行状态，用于检测任务结束
+    var wasRunning by remember { mutableStateOf(false) }
+
+    // 任务结束时清空输入框
+    LaunchedEffect(isRunning) {
+        if (wasRunning && !isRunning) {
+            // 从运行中变为未运行，说明任务结束
+            inputText = ""
+        }
+        wasRunning = isRunning
+    }
 
     // 自动滚动到底部
     LaunchedEffect(logs.size) {
@@ -160,10 +177,17 @@ fun HomeScreen(
             onInputChange = { inputText = it },
             onExecute = {
                 if (inputText.isNotBlank()) {
+                    // 收起键盘并清除焦点
+                    keyboardController?.hide()
+                    focusManager.clearFocus()
                     onExecute(inputText)
                 }
             },
-            onStop = onStop,
+            onStop = {
+                // 停止任务并清空输入框
+                inputText = ""
+                onStop()
+            },
             isRunning = isRunning,
             enabled = shizukuAvailable,
             onInputClick = {

@@ -213,22 +213,36 @@ fun HistoryRecordCard(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
                         text = record.formattedStartTime,
                         fontSize = 12.sp,
+                        color = colors.textHint,
+                        maxLines = 1
+                    )
+                    Text(
+                        text = "·",
+                        fontSize = 12.sp,
                         color = colors.textHint
                     )
                     Text(
-                        text = "${record.steps.size} 步",
+                        text = "${record.steps.size}步",
+                        fontSize = 12.sp,
+                        color = colors.textHint,
+                        maxLines = 1
+                    )
+                    Text(
+                        text = "·",
                         fontSize = 12.sp,
                         color = colors.textHint
                     )
                     Text(
                         text = record.formattedDuration,
                         fontSize = 12.sp,
-                        color = colors.textHint
+                        color = colors.textHint,
+                        maxLines = 1
                     )
                 }
             }

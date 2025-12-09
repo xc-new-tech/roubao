@@ -41,7 +41,9 @@ Why "Roubao" (肉包, meaning "meat bun")? Because the author doesn't like veget
 |---------|--------|--------------|-------------------|
 | Requires PC | ❌ No | ❌ No | ✅ Most do |
 | Requires Hardware | ❌ No | ✅ $480+ | ❌ No |
+| Native Android | ✅ Kotlin | ❓ Unknown | ❌ Python |
 | Open Source | ✅ MIT | ❌ Closed | ✅ Yes |
+| Skills/Tools Architecture | ✅ Full | ❓ Unknown | ❌ No |
 | UI Design | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐ |
 | Custom Models | ✅ Yes | ❌ Doubao only | ✅ Partial |
 
@@ -59,6 +61,93 @@ Why "Roubao" (肉包, meaning "meat bun")? Because the author doesn't like veget
 One app, install and use. No computer, no cables, no technical background required.
 
 Open App → Configure API Key → Tell it what you want → Done.
+
+---
+
+## Why Choose Roubao?
+
+### Native Android Implementation, Not a Python Script Wrapper
+
+Almost all phone automation open-source projects (including Alibaba's MobileAgent) are **Python implementations**, requiring:
+- Running Python scripts on a computer
+- Phone connected to computer via USB/WiFi ADB
+- Screenshots transferred to computer, processed, then commands sent back to phone
+
+**Roubao is completely different.**
+
+We **rewrote the entire MobileAgent framework in Kotlin**, running natively on Android:
+- Screenshot, analysis, and execution all happen locally on the phone
+- No computer relay, lower latency
+- Uses Shizuku for system-level permissions instead of cumbersome ADB commands
+
+### Why Shizuku?
+
+For security reasons, regular Android apps cannot:
+- Simulate user taps and swipes on screen
+- Read UI content from other apps
+- Execute system commands like `input tap` or `screencap`
+
+Traditional solutions require connecting to a computer for ADB commands. **Shizuku** is an elegant solution:
+
+1. Start Shizuku service **once** via wireless debugging or computer ADB
+2. After that, regular apps can gain ADB-level permissions
+3. **No Root required**, no need to connect to computer each time
+
+This allows Roubao to execute screenshots, taps, and input directly on the phone, truly achieving "one app does it all."
+
+### Claude Code-Inspired Tools/Skills Architecture
+
+Inspired by [Claude Code](https://claude.ai/claude-code), Roubao implements a **Tools + Skills dual-layer Agent framework**:
+
+```
+User: "Order me some food"
+         │
+         ▼
+   ┌─────────────┐
+   │ SkillManager │  ← Intent Recognition
+   └─────────────┘
+         │
+    ┌────┴────┐
+    │         │
+    ▼         ▼
+🚀 Fast Path   🤖 Standard Path
+(Delegation)   (GUI Automation)
+    │              │
+    ▼              ▼
+Direct DeepLink  Agent Loop
+Open Xiaomei AI  Operate Meituan App
+```
+
+**Tools Layer (Atomic Capabilities)**
+
+Low-level toolkit where each Tool performs an independent operation:
+
+| Tool | Function |
+|------|----------|
+| `search_apps` | Smart app search (pinyin, semantic support) |
+| `open_app` | Open application |
+| `deep_link` | Jump to specific app page via DeepLink |
+| `clipboard` | Read/write clipboard |
+| `shell` | Execute Shell commands |
+| `http` | HTTP requests (call external APIs) |
+
+**Skills Layer (User Intent)**
+
+User-facing task layer that maps natural language to specific operations:
+
+| Skill | Type | Description |
+|-------|------|-------------|
+| Order Food (Xiaomei) | Delegation | Directly open Xiaomei AI to help order |
+| Order Food (Meituan) | GUI Automation | Step-by-step operation on Meituan App |
+| Navigate (Amap) | Delegation | DeepLink directly to Amap search |
+| Generate Image (Jimeng) | Delegation | Open Jimeng AI to generate images |
+| Send WeChat | GUI Automation | Auto-operate WeChat to send messages |
+
+**Two Execution Modes:**
+
+1. **Delegation**: For high-confidence matches, directly open AI-capable apps (like Xiaomei, Doubao, Jimeng) via DeepLink to complete tasks. **Fast, one-step.**
+
+2. **GUI Automation**: For apps without AI capability (like Meituan, WeChat), complete tasks through traditional screenshot-analyze-operate loops. Skills provide step guidance for better success rates.
 
 ---
 
@@ -99,8 +188,9 @@ Open App → Configure API Key → Tell it what you want → Done.
 ### Prerequisites
 
 1. **Android 8.0 (API 26)** or higher
-2. **Shizuku** - For system-level control permissions
-3. **VLM API Key** - Requires a Vision Language Model API key
+2. **WiFi Network** - Shizuku wireless debugging requires WiFi connection, ensure your phone is connected to WiFi
+3. **Shizuku** - For system-level control permissions
+4. **VLM API Key** - Requires a Vision Language Model API key (e.g., Alibaba Qwen-VL)
 
 ### Installation Steps
 
@@ -160,67 +250,150 @@ Watch trending videos on Bilibili
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                     Roubao App                          │
-├─────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐     │
-│  │   UI Layer  │  │ Agent Layer │  │Control Layer│     │
-│  │   Compose   │  │ MobileAgent │  │ Controller  │     │
-│  └─────────────┘  └─────────────┘  └─────────────┘     │
-│         │                │                │             │
-│         └────────────────┼────────────────┘             │
-│                          │                              │
-│  ┌───────────────────────▼───────────────────────────┐ │
-│  │                  VLM Client                        │ │
-│  │          (Qwen-VL / GPT-4V / Claude)              │ │
-│  └───────────────────────────────────────────────────┘ │
-│                          │                              │
-├──────────────────────────┼──────────────────────────────┤
-│                          ▼                              │
-│  ┌───────────────────────────────────────────────────┐ │
-│  │                   Shizuku                          │ │
-│  │           (System-level Control)                   │ │
-│  └───────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                         Roubao App                            │
+├──────────────────────────────────────────────────────────────┤
+│                                                              │
+│   ┌─────────────────────────────────────────────────────┐   │
+│   │                  UI Layer (Compose)                  │   │
+│   │          HomeScreen / Settings / History            │   │
+│   └─────────────────────────────────────────────────────┘   │
+│                            │                                 │
+│   ┌────────────────────────▼────────────────────────────┐   │
+│   │                   Skills Layer                       │   │
+│   │    SkillManager → Intent Recognition → Fast/Standard │   │
+│   │    ┌─────────────────────────────────────────────┐  │   │
+│   │    │ Order Food │ Navigate │ Taxi │ WeChat │ AI Art │  │
+│   │    └─────────────────────────────────────────────┘  │   │
+│   └─────────────────────────────────────────────────────┘   │
+│                            │                                 │
+│   ┌────────────────────────▼────────────────────────────┐   │
+│   │                   Tools Layer                        │   │
+│   │    ToolManager → Atomic Capability Wrapper           │   │
+│   │    ┌─────────────────────────────────────────────┐  │   │
+│   │    │ search_apps │ open_app │ deep_link │ clipboard │  │
+│   │    │ shell │ http │ screenshot │ tap │ swipe │ type │  │
+│   │    └─────────────────────────────────────────────┘  │   │
+│   └─────────────────────────────────────────────────────┘   │
+│                            │                                 │
+│   ┌────────────────────────▼────────────────────────────┐   │
+│   │                  Agent Layer                         │   │
+│   │    MobileAgent (ported from MobileAgent-v3)          │   │
+│   │    ┌───────────┬───────────┬───────────┬──────────┐ │   │
+│   │    │  Manager  │ Executor  │ Reflector │ Notetaker│ │   │
+│   │    │ (Planning)│(Execution)│(Reflection)│ (Notes) │ │   │
+│   │    └───────────┴───────────┴───────────┴──────────┘ │   │
+│   └─────────────────────────────────────────────────────┘   │
+│                            │                                 │
+│   ┌────────────────────────▼────────────────────────────┐   │
+│   │                  VLM Client                          │   │
+│   │           Qwen-VL / GPT-4V / Claude                  │   │
+│   └─────────────────────────────────────────────────────┘   │
+│                            │                                 │
+├────────────────────────────┼────────────────────────────────┤
+│                            ▼                                 │
+│   ┌─────────────────────────────────────────────────────┐   │
+│   │                    Shizuku                           │   │
+│   │              System-level Control                    │   │
+│   │     screencap │ input tap │ input swipe │ am start  │   │
+│   └─────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ### Workflow
 
-1. **Screenshot** - Capture current screen via Shizuku
-2. **Analyze** - Send screenshot and instructions to VLM for operation suggestions
-3. **Execute** - Perform taps, swipes, text input via Shizuku
-4. **Loop** - Repeat until task completion or safety limits reached
+```
+User Input
+      │
+      ▼
+┌─────────────────┐
+│  Skills Match    │ ← Check for matching Skill
+└─────────────────┘
+      │
+      ├── High-confidence Delegation Skill ──▶ Direct DeepLink ──▶ Done
+      │
+      ▼
+┌─────────────────┐
+│ Standard Agent   │
+│     Loop        │
+└─────────────────┘
+      │
+      ▼
+   ┌──────────────────────────────────────────────┐
+   │  1. Screenshot - Shizuku screencap           │
+   │  2. Manager Planning - VLM analyzes state    │
+   │  3. Executor Decision - Determine next step  │
+   │  4. Execute Action - tap/swipe/type/open_app │
+   │  5. Reflector - Evaluate action outcome      │
+   │  6. Loop until done or safety limit          │
+   └──────────────────────────────────────────────┘
+```
 
 ### Project Structure
 
 ```
-app/src/main/java/com/example/autopilot/
-├── agent/              # AI Agent core logic
-│   └── MobileAgent.kt  # Main Agent implementation
-├── controller/         # Device control
+app/src/main/java/com/roubao/autopilot/
+├── agent/                    # AI Agent Core (ported from MobileAgent-v3)
+│   ├── MobileAgent.kt        # Agent main loop
+│   ├── Manager.kt            # Planning Agent
+│   ├── Executor.kt           # Execution Agent
+│   ├── ActionReflector.kt    # Reflection Agent
+│   ├── Notetaker.kt          # Notes Agent
+│   └── InfoPool.kt           # State pool
+│
+├── tools/                    # Tools Layer - Atomic Capabilities
+│   ├── Tool.kt               # Tool interface definition
+│   ├── ToolManager.kt        # Tool manager
+│   ├── SearchAppsTool.kt     # App search
+│   ├── OpenAppTool.kt        # Open app
+│   ├── DeepLinkTool.kt       # DeepLink jump
+│   ├── ClipboardTool.kt      # Clipboard operations
+│   ├── ShellTool.kt          # Shell commands
+│   └── HttpTool.kt           # HTTP requests
+│
+├── skills/                   # Skills Layer - User Intent
+│   ├── Skill.kt              # Skill interface definition
+│   ├── SkillRegistry.kt      # Skill registry
+│   └── SkillManager.kt       # Skill manager
+│
+├── controller/               # Device Control
 │   ├── DeviceController.kt   # Shizuku controller
-│   └── AppScanner.kt         # App scanner
-├── data/               # Data layer
-│   ├── SettingsManager.kt    # Settings management
-│   └── ExecutionRepository.kt # Execution history storage
-├── ui/                 # User interface
-│   ├── screens/        # Screen composables
-│   ├── theme/          # Theme definitions
+│   └── AppScanner.kt         # App scanner (pinyin/semantic search)
+│
+├── vlm/                      # VLM Client
+│   └── VLMClient.kt          # API wrapper
+│
+├── ui/                       # User Interface
+│   ├── screens/              # Screen composables
+│   ├── theme/                # Theme definitions
 │   └── OverlayService.kt     # Overlay service
-├── vlm/                # VLM client
-│   └── VLMClient.kt    # API wrapper
-└── MainActivity.kt     # Main Activity
+│
+├── data/                     # Data Layer
+│   └── SettingsManager.kt    # Settings management
+│
+└── App.kt                    # Application entry
+
+app/src/main/assets/
+└── skills.json               # Skills configuration file
 ```
 
 ---
 
 ## Roadmap
 
+### Completed
+
+- [x] **Native Android Implementation** - Kotlin rewrite of MobileAgent, no Python dependency
+- [x] **Tools Layer** - Atomic capability wrapper (search_apps, deep_link, clipboard, etc.)
+- [x] **Skills Layer** - User intent mapping with Delegation and GUI Automation modes
+- [x] **Smart App Search** - Multi-dimensional matching via pinyin, semantic, and category
+- [x] **Fast Path** - High-confidence Skills direct DeepLink jump
+
 ### Near-term
 
-- [ ] **Skills System** - Predefined operation flows for improved efficiency and accuracy
 - [ ] **MCP (Model Context Protocol)** - Extended capabilities like calendar, email, file management
 - [ ] **Execution Recording** - Save task execution videos for review and debugging
+- [ ] **More Skills** - Expand built-in Skills, support user customization
 
 ### Mid-term
 

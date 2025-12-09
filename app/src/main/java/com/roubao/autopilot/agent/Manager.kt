@@ -31,12 +31,19 @@ class Manager {
         append("IMPORTANT: For requests that explicitly require an answer, ")
         append("always add 'perform the `answer` action' as the last step to the plan!\n\n")
 
+        // Skill 上下文
+        if (infoPool.skillContext.isNotEmpty()) {
+            append("### Available Skills ###\n")
+            append("${infoPool.skillContext}\n\n")
+        }
+
         append("### Guidelines ###\n")
         append("1. IMPORTANT: If you see the \"肉包\" or \"Baozi\" app interface (this automation tool), press Home button first to go back to the home screen, then proceed with the task.\n")
         append("2. Use the `open_app` action whenever you want to open an app.\n")
         append("3. Use search to quickly find a file or entry with a specific name.\n")
+        append("4. If there are relevant skills listed above, follow their suggested steps for better efficiency.\n")
         if (infoPool.additionalKnowledge.isNotEmpty()) {
-            append("4. ${infoPool.additionalKnowledge}\n")
+            append("5. ${infoPool.additionalKnowledge}\n")
         }
         append("\n")
 

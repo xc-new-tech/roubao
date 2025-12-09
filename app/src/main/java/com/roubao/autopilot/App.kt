@@ -2,15 +2,51 @@ package com.roubao.autopilot
 
 import android.app.Application
 import android.content.pm.PackageManager
+import com.roubao.autopilot.controller.AppScanner
+import com.roubao.autopilot.controller.DeviceController
+import com.roubao.autopilot.skills.SkillManager
+import com.roubao.autopilot.tools.ToolManager
 import rikka.shizuku.Shizuku
 
 class App : Application() {
 
+    lateinit var deviceController: DeviceController
+        private set
+    lateinit var appScanner: AppScanner
+        private set
+
     override fun onCreate() {
         super.onCreate()
+        instance = this
 
         // 初始化 Shizuku
         Shizuku.addRequestPermissionResultListener(REQUEST_PERMISSION_RESULT_LISTENER)
+
+        // 初始化核心组件
+        initializeComponents()
+    }
+
+    private fun initializeComponents() {
+        // 初始化设备控制器
+        deviceController = DeviceController(this)
+        deviceController.setCacheDir(cacheDir)
+
+        // 初始化应用扫描器
+        appScanner = AppScanner(this)
+
+        // 初始化 Tools 层
+        val toolManager = ToolManager.init(this, deviceController, appScanner)
+
+        // 预扫描应用列表（同步执行，确保 SkillManager 能检测到已安装应用）
+        println("[App] 开始扫描已安装应用...")
+        appScanner.refreshApps()
+        println("[App] 已扫描 ${appScanner.getApps().size} 个应用")
+
+        // 初始化 Skills 层（传入 appScanner 用于检测已安装应用）
+        val skillManager = SkillManager.init(this, toolManager, appScanner)
+        println("[App] SkillManager 已加载 ${skillManager.getAllSkills().size} 个 Skills")
+
+        println("[App] 组件初始化完成")
     }
 
     override fun onTerminate() {
@@ -19,6 +55,13 @@ class App : Application() {
     }
 
     companion object {
+        @Volatile
+        private var instance: App? = null
+
+        fun getInstance(): App {
+            return instance ?: throw IllegalStateException("App 未初始化")
+        }
+
         private val REQUEST_PERMISSION_RESULT_LISTENER =
             Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
                 val granted = grantResult == PackageManager.PERMISSION_GRANTED

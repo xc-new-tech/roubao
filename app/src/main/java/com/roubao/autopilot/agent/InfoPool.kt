@@ -38,7 +38,10 @@ data class InfoPool(
     var screenHeight: Int = 2400,
 
     // 额外知识
-    var additionalKnowledge: String = ""
+    var additionalKnowledge: String = "",
+
+    // Skill 上下文（从 SkillManager 获取的相关技能信息）
+    var skillContext: String = ""
 )
 
 /**
