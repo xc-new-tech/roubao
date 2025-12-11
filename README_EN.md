@@ -449,6 +449,35 @@ cd roubao
 
 ---
 
+## Bug Reports
+
+Encountered a crash or bug? Here's how to report:
+
+### Export Logs
+
+1. Open Roubao App → Settings
+2. Find "Feedback & Debug" section
+3. Tap "Export Logs"
+4. Choose a sharing method (Email, etc.) to send to developers
+
+### Log Contents
+
+- Device model and Android version
+- App version
+- Crash stack traces (if any)
+- Operation logs
+
+> 💡 Log files do NOT contain your API Key or personal information
+
+### Submit an Issue
+
+Please submit issues on [GitHub Issues](https://github.com/Turbo1123/roubao/issues) with:
+- Problem description
+- Steps to reproduce
+- Exported log file
+
+---
+
 ## Contributing
 
 Issues and Pull Requests are welcome!

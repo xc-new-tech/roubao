@@ -6,6 +6,7 @@ import com.roubao.autopilot.controller.AppScanner
 import com.roubao.autopilot.controller.DeviceController
 import com.roubao.autopilot.skills.SkillManager
 import com.roubao.autopilot.tools.ToolManager
+import com.roubao.autopilot.utils.CrashHandler
 import rikka.shizuku.Shizuku
 
 class App : Application() {
@@ -18,6 +19,9 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+
+        // 初始化崩溃捕获
+        CrashHandler.getInstance().init(this)
 
         // 初始化 Shizuku
         Shizuku.addRequestPermissionResultListener(REQUEST_PERMISSION_RESULT_LISTENER)

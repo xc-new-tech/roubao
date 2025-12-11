@@ -41,6 +41,7 @@ import com.roubao.autopilot.data.ApiProvider
 import com.roubao.autopilot.data.AppSettings
 import com.roubao.autopilot.ui.theme.BaoziTheme
 import com.roubao.autopilot.ui.theme.ThemeMode
+import com.roubao.autopilot.utils.CrashHandler
 
 @Composable
 fun SettingsScreen(
@@ -195,6 +196,60 @@ fun SettingsScreen(
                     isSelected = model == settings.model,
                     onSelect = { onUpdateModel(model) },
                     onDelete = { onRemoveCustomModel(model) }
+                )
+            }
+        }
+
+        // 反馈分组
+        item {
+            SettingsSection(title = "反馈与调试")
+        }
+
+        item {
+            val context = LocalContext.current
+            val logStats = remember { mutableStateOf(CrashHandler.getLogStats(context)) }
+
+            SettingsItem(
+                icon = Icons.Default.Info,
+                title = "导出日志",
+                subtitle = logStats.value,
+                onClick = {
+                    CrashHandler.shareLogs(context)
+                }
+            )
+        }
+
+        item {
+            val context = LocalContext.current
+            var showClearDialog by remember { mutableStateOf(false) }
+
+            SettingsItem(
+                icon = Icons.Default.Close,
+                title = "清除日志",
+                subtitle = "删除所有本地日志文件",
+                onClick = { showClearDialog = true }
+            )
+
+            if (showClearDialog) {
+                AlertDialog(
+                    onDismissRequest = { showClearDialog = false },
+                    containerColor = BaoziTheme.colors.backgroundCard,
+                    title = { Text("确认清除", color = BaoziTheme.colors.textPrimary) },
+                    text = { Text("确定要删除所有日志文件吗？", color = BaoziTheme.colors.textSecondary) },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            CrashHandler.clearLogs(context)
+                            showClearDialog = false
+                            android.widget.Toast.makeText(context, "日志已清除", android.widget.Toast.LENGTH_SHORT).show()
+                        }) {
+                            Text("确定", color = BaoziTheme.colors.error)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showClearDialog = false }) {
+                            Text("取消", color = BaoziTheme.colors.textSecondary)
+                        }
+                    }
                 )
             }
         }
