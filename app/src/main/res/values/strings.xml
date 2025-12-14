@@ -145,6 +145,9 @@
     <string name="btn_back">返回</string>
     <string name="btn_got_it">知道了</string>
 
+    <!-- Accessibility Service -->
+    <string name="accessibility_service_description">肉包无障碍服务用于获取屏幕 UI 结构和执行自动化操作。开启后可以更精准地识别和操作界面元素。</string>
+
     <!-- Toast Messages -->
     <string name="toast_enter_instruction">请输入指令</string>
     <string name="toast_enter_api_key">请输入 API Key</string>
