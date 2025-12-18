@@ -27,9 +27,12 @@ import androidx.lifecycle.lifecycleScope
 import android.net.Uri
 import android.provider.Settings
 import com.roubao.autopilot.agent.MobileAgent
+import com.roubao.autopilot.autoglm.ActionParser
+import com.roubao.autopilot.autoglm.AutoGLMAgent
 import com.roubao.autopilot.controller.AppScanner
 import com.roubao.autopilot.controller.DeviceController
 import com.roubao.autopilot.data.*
+import com.roubao.autopilot.ui.OverlayService
 import com.roubao.autopilot.ui.screens.*
 import com.roubao.autopilot.ui.theme.*
 import androidx.compose.ui.graphics.toArgb
@@ -301,6 +304,7 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onUpdateRootModeEnabled = { settingsManager.updateRootModeEnabled(it) },
                                 onUpdateSuCommandEnabled = { settingsManager.updateSuCommandEnabled(it) },
+                                onUpdateUseAutoGLMMode = { settingsManager.updateUseAutoGLMMode(it) },
                                 onSelectProvider = { settingsManager.selectProvider(it) },
                                 shizukuAvailable = isShizukuAvailable,
                                 shizukuPrivilegeLevel = if (isShizukuAvailable) {
@@ -431,10 +435,11 @@ class MainActivity : ComponentActivity() {
             Toast.makeText(this, "请输入指令", Toast.LENGTH_SHORT).show()
             return
         }
-        if (apiKey.isBlank()) {
-            Toast.makeText(this, "请输入 API Key", Toast.LENGTH_SHORT).show()
-            return
-        }
+        // 测试阶段：有默认 API Key，不再强制检查
+        // if (apiKey.isBlank()) {
+        //     Toast.makeText(this, "请输入 API Key", Toast.LENGTH_SHORT).show()
+        //     return
+        // }
 
         // 检查悬浮窗权限
         if (!Settings.canDrawOverlays(this)) {
@@ -450,19 +455,15 @@ class MainActivity : ComponentActivity() {
         // 立即设置执行状态为 true，显示停止按钮
         isExecuting.value = true
 
+        // 默认配置
+        val defaultBaseUrl = "https://open.bigmodel.cn/api/paas/v4"
+        val defaultModel = "autoglm-phone"
+
         val vlmClient = VLMClient(
-            apiKey = apiKey,
-            baseUrl = baseUrl.ifBlank { "https://dashscope.aliyuncs.com/compatible-mode/v1" },
-            model = model.ifBlank { "qwen3-vl-plus" }
+            apiKey = apiKey,  // API Key 需要用户在设置中配置
+            baseUrl = baseUrl.ifBlank { defaultBaseUrl },
+            model = model.ifBlank { defaultModel }
         )
-
-        mobileAgent.value = MobileAgent(vlmClient, deviceController, this)
-
-        // 设置停止回调，用于取消协程
-        mobileAgent.value?.onStopRequested = {
-            currentExecutionJob?.cancel()
-            currentExecutionJob = null
-        }
 
         // 创建执行记录
         val record = ExecutionRecord(
@@ -477,6 +478,177 @@ class MainActivity : ComponentActivity() {
 
         // 取消之前的任务（如果有）
         currentExecutionJob?.cancel()
+
+        // 获取当前设置
+        val useAutoGLM = settingsManager.settings.value.useAutoGLMMode
+
+        if (useAutoGLM) {
+            // 使用 AutoGLM Agent
+            runAutoGLMAgent(instruction, vlmClient, maxSteps, record)
+        } else {
+            // 使用原来的 MobileAgent
+            runMobileAgent(instruction, vlmClient, maxSteps, record)
+        }
+    }
+
+    /**
+     * 运行 AutoGLM Agent (单循环架构)
+     */
+    private fun runAutoGLMAgent(
+        instruction: String,
+        vlmClient: VLMClient,
+        maxSteps: Int,
+        record: ExecutionRecord
+    ) {
+        val agentLogs = mutableListOf<String>()
+
+        // 启动悬浮窗，设置停止回调
+        OverlayService.show(this, "AutoGLM 启动中...") {
+            // 停止回调
+            currentExecutionJob?.cancel()
+            currentExecutionJob = null
+        }
+
+        val agent = AutoGLMAgent(
+            vlmClient = vlmClient,
+            deviceController = deviceController,
+            context = this,
+            config = AutoGLMAgent.AgentConfig(
+                maxSteps = maxSteps,
+                useStreaming = true
+            )
+        )
+
+        val callback = object : AutoGLMAgent.StepCallback {
+            override fun onStepStart(stepNumber: Int) {
+                val log = "========== Step $stepNumber =========="
+                agentLogs.add(log)
+                OverlayService.update("步骤 $stepNumber")
+                OverlayService.clearThinking()
+                Log.d(TAG, log)
+            }
+
+            override fun onThinkingChunk(chunk: String) {
+                // 实时显示思考过程
+                OverlayService.updateThinking(chunk, append = true)
+            }
+
+            override fun onThinking(thinking: String) {
+                val log = "思考: ${thinking.take(100)}..."
+                agentLogs.add(log)
+                Log.d(TAG, "思考: $thinking")
+            }
+
+            override fun onAction(action: ActionParser.ParsedAction) {
+                val actionStr = when (action) {
+                    is ActionParser.ParsedAction.Do -> "动作: ${action.action} ${action.params}"
+                    is ActionParser.ParsedAction.Finish -> "完成: ${action.message}"
+                    is ActionParser.ParsedAction.Error -> "解析错误: ${action.reason}"
+                }
+                agentLogs.add(actionStr)
+                OverlayService.update(actionStr.take(30))
+                Log.d(TAG, actionStr)
+            }
+
+            override fun onStepComplete(result: AutoGLMAgent.StepResult) {
+                val status = if (result.success) "成功" else "失败"
+                val method = result.executionMethod?.let { " (via $it)" } ?: ""
+                val log = "步骤完成: $status$method"
+                agentLogs.add(log)
+                Log.d(TAG, log)
+            }
+
+            override fun onSensitiveAction(message: String): Boolean {
+                // TODO: 实现敏感操作确认对话框
+                Log.w(TAG, "敏感操作: $message")
+                return true  // 暂时默认允许
+            }
+
+            override fun onTakeOver(message: String) {
+                agentLogs.add("人工接管: $message")
+                OverlayService.showTakeOver(message) {
+                    // 继续执行
+                }
+                Log.d(TAG, "人工接管: $message")
+            }
+
+            override fun onPerformanceMetrics(timeToFirstTokenMs: Long?, totalTimeMs: Long) {
+                OverlayService.showMetrics(timeToFirstTokenMs, totalTimeMs)
+            }
+        }
+
+        currentExecutionJob = lifecycleScope.launch {
+            // 保存初始记录
+            executionRepository.saveRecord(record)
+            executionRecords.value = executionRepository.getAllRecords()
+
+            try {
+                val result = agent.run(instruction, callback)
+
+                val updatedRecord = record.copy(
+                    endTime = System.currentTimeMillis(),
+                    status = if (result.success) ExecutionStatus.COMPLETED else ExecutionStatus.FAILED,
+                    logs = agentLogs,
+                    resultMessage = result.message
+                )
+                executionRepository.saveRecord(updatedRecord)
+                executionRecords.value = executionRepository.getAllRecords()
+
+                Toast.makeText(this@MainActivity, result.message, Toast.LENGTH_LONG).show()
+                isExecuting.value = false
+
+                kotlinx.coroutines.delay(2000)
+                OverlayService.hide(this@MainActivity)
+
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                    val updatedRecord = record.copy(
+                        endTime = System.currentTimeMillis(),
+                        status = ExecutionStatus.STOPPED,
+                        logs = agentLogs,
+                        resultMessage = "已取消"
+                    )
+                    executionRepository.saveRecord(updatedRecord)
+                    executionRecords.value = executionRepository.getAllRecords()
+
+                    isExecuting.value = false
+                    Toast.makeText(this@MainActivity, "任务已停止", Toast.LENGTH_SHORT).show()
+                    OverlayService.hide(this@MainActivity)
+                    shouldNavigateToRecord.value = true
+                }
+            } catch (e: Exception) {
+                val updatedRecord = record.copy(
+                    endTime = System.currentTimeMillis(),
+                    status = ExecutionStatus.FAILED,
+                    logs = agentLogs,
+                    resultMessage = "错误: ${e.message}"
+                )
+                executionRepository.saveRecord(updatedRecord)
+                executionRecords.value = executionRepository.getAllRecords()
+
+                isExecuting.value = false
+                Toast.makeText(this@MainActivity, "错误: ${e.message}", Toast.LENGTH_LONG).show()
+                OverlayService.hide(this@MainActivity)
+            }
+        }
+    }
+
+    /**
+     * 运行原来的 MobileAgent (三层架构)
+     */
+    private fun runMobileAgent(
+        instruction: String,
+        vlmClient: VLMClient,
+        maxSteps: Int,
+        record: ExecutionRecord
+    ) {
+        mobileAgent.value = MobileAgent(vlmClient, deviceController, this)
+
+        // 设置停止回调，用于取消协程
+        mobileAgent.value?.onStopRequested = {
+            currentExecutionJob?.cancel()
+            currentExecutionJob = null
+        }
 
         currentExecutionJob = lifecycleScope.launch {
             // 保存初始记录

@@ -10,7 +10,9 @@ import android.graphics.BitmapFactory
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.view.accessibility.AccessibilityNodeInfo
 import com.roubao.autopilot.IShellService
+import com.roubao.autopilot.accessibility.AutoPilotAccessibilityService
 import com.roubao.autopilot.service.ShellService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -24,8 +26,26 @@ import java.util.concurrent.TimeUnit
 
 /**
  * 设备控制器 - 通过 Shizuku UserService 执行 shell 命令
+ * 优先使用 AccessibilityService 进行操作，降级使用 Shizuku
  */
 class DeviceController(private val context: Context? = null) {
+
+    /** 执行方式 */
+    enum class ExecutionMethod {
+        A11Y,       // 使用 AccessibilityService
+        SHIZUKU     // 使用 Shizuku shell
+    }
+
+    /** 上一次操作使用的执行方式 */
+    var lastExecutionMethod: ExecutionMethod = ExecutionMethod.SHIZUKU
+        private set
+
+    /** 获取无障碍服务实例 */
+    private val a11yService: AutoPilotAccessibilityService?
+        get() = AutoPilotAccessibilityService.getInstance()
+
+    /** 检查无障碍服务是否可用 */
+    fun isA11yAvailable(): Boolean = a11yService != null
 
     companion object {
         // 使用 /data/local/tmp，shell 用户有权限访问
@@ -168,16 +188,38 @@ class DeviceController(private val context: Context? = null) {
     }
 
     /**
-     * 点击屏幕
+     * 点击屏幕 - 优先使用 A11y 手势
      */
     fun tap(x: Int, y: Int) {
+        val service = a11yService
+        if (service != null) {
+            val success = service.clickAt(x, y)
+            if (success) {
+                lastExecutionMethod = ExecutionMethod.A11Y
+                println("[DeviceController] tap($x, $y) via A11y")
+                return
+            }
+        }
+        // 降级使用 Shizuku
+        lastExecutionMethod = ExecutionMethod.SHIZUKU
         exec("input tap $x $y")
+        println("[DeviceController] tap($x, $y) via Shizuku")
     }
 
     /**
-     * 长按
+     * 长按 - 优先使用 A11y 手势
      */
     fun longPress(x: Int, y: Int, durationMs: Int = 1000) {
+        val service = a11yService
+        if (service != null) {
+            val success = service.longPressAt(x, y, durationMs.toLong())
+            if (success) {
+                lastExecutionMethod = ExecutionMethod.A11Y
+                println("[DeviceController] longPress($x, $y, $durationMs) via A11y")
+                return
+            }
+        }
+        lastExecutionMethod = ExecutionMethod.SHIZUKU
         exec("input swipe $x $y $x $y $durationMs")
     }
 
@@ -185,31 +227,70 @@ class DeviceController(private val context: Context? = null) {
      * 双击
      */
     fun doubleTap(x: Int, y: Int) {
+        val service = a11yService
+        if (service != null) {
+            // A11y 双击：两次快速点击
+            service.clickAt(x, y, 50)
+            Thread.sleep(50)
+            val success = service.clickAt(x, y, 50)
+            if (success) {
+                lastExecutionMethod = ExecutionMethod.A11Y
+                println("[DeviceController] doubleTap($x, $y) via A11y")
+                return
+            }
+        }
+        lastExecutionMethod = ExecutionMethod.SHIZUKU
         exec("input tap $x $y && input tap $x $y")
     }
 
     /**
-     * 滑动
+     * 滑动 - 优先使用 A11y 手势
      */
     fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int = 500) {
+        val service = a11yService
+        if (service != null) {
+            val success = service.swipe(x1, y1, x2, y2, durationMs.toLong())
+            if (success) {
+                lastExecutionMethod = ExecutionMethod.A11Y
+                println("[DeviceController] swipe($x1,$y1 -> $x2,$y2) via A11y")
+                return
+            }
+        }
+        lastExecutionMethod = ExecutionMethod.SHIZUKU
         exec("input swipe $x1 $y1 $x2 $y2 $durationMs")
     }
 
     /**
-     * 输入文本 (使用剪贴板方式，支持中文)
+     * 输入文本 - 优先使用 A11y 直接设置
+     * 会先清除现有文本再输入新文本
      */
     fun type(text: String) {
-        // 检查是否包含非 ASCII 字符
-        val hasNonAscii = text.any { it.code > 127 }
+        // 优先使用 A11y 直接设置文本 (最快，自动清除)
+        val service = a11yService
+        if (service != null) {
+            val success = service.inputTextToFocused(text)
+            if (success) {
+                lastExecutionMethod = ExecutionMethod.A11Y
+                println("[DeviceController] type('$text') via A11y")
+                return
+            }
+        }
 
+        // 降级使用 Shizuku - 需要先清除现有文本
+        lastExecutionMethod = ExecutionMethod.SHIZUKU
+        // 先全选后删除，清除现有文本
+        exec("input keyevent 67")  // 删除键，尝试清除一些
+        exec("input keyevent KEYCODE_MOVE_HOME")  // 移到开头
+        exec("input keyevent --longpress 67")  // 长按删除
+
+        val hasNonAscii = text.any { it.code > 127 }
         if (hasNonAscii) {
-            // 中文等使用剪贴板方式
             typeViaClipboard(text)
         } else {
-            // 纯英文数字使用 input text
             val escaped = text.replace("'", "'\\''")
             exec("input text '$escaped'")
         }
+        println("[DeviceController] type('$text') via Shizuku")
     }
 
     /**
@@ -301,16 +382,36 @@ class DeviceController(private val context: Context? = null) {
     }
 
     /**
-     * 返回键
+     * 返回键 - 优先使用 A11y
      */
     fun back() {
+        val service = a11yService
+        if (service != null) {
+            val success = service.performBack()
+            if (success) {
+                lastExecutionMethod = ExecutionMethod.A11Y
+                println("[DeviceController] back() via A11y")
+                return
+            }
+        }
+        lastExecutionMethod = ExecutionMethod.SHIZUKU
         exec("input keyevent 4")
     }
 
     /**
-     * Home 键
+     * Home 键 - 优先使用 A11y
      */
     fun home() {
+        val service = a11yService
+        if (service != null) {
+            val success = service.performHome()
+            if (success) {
+                lastExecutionMethod = ExecutionMethod.A11Y
+                println("[DeviceController] home() via A11y")
+                return
+            }
+        }
+        lastExecutionMethod = ExecutionMethod.SHIZUKU
         exec("input keyevent 3")
     }
 
@@ -533,5 +634,58 @@ class DeviceController(private val context: Context? = null) {
      */
     fun openDeepLink(uri: String) {
         exec("am start -a android.intent.action.VIEW -d \"$uri\"")
+    }
+
+    // ==================== A11y 辅助方法 ====================
+
+    /**
+     * 通过文本查找并点击元素
+     * @return true 如果找到并点击成功
+     */
+    fun clickByText(text: String): Boolean {
+        val service = a11yService ?: return false
+        val node = service.findClickableByText(text) ?: return false
+        val success = service.clickNode(node)
+        node.recycle()
+        println("[DeviceController] clickByText('$text') = $success")
+        return success
+    }
+
+    /**
+     * 通过文本查找输入框并输入文字
+     * @return true 如果找到并输入成功
+     */
+    fun typeToFieldByText(fieldText: String, inputText: String): Boolean {
+        val service = a11yService ?: return false
+        val nodes = service.findByText(fieldText)
+        for (node in nodes) {
+            if (node.isEditable) {
+                val success = service.inputText(node, inputText)
+                node.recycle()
+                println("[DeviceController] typeToFieldByText('$fieldText', '$inputText') = $success")
+                return success
+            }
+            node.recycle()
+        }
+        return false
+    }
+
+    /**
+     * 获取 UI 树描述 (用于调试或辅助 VLM)
+     */
+    fun getUITreeDescription(): String? {
+        return a11yService?.getUITreeDescription()
+    }
+
+    /**
+     * 查找可编辑的输入框并输入
+     */
+    fun typeToFirstEditable(text: String): Boolean {
+        val service = a11yService ?: return false
+        val node = service.findEditableNode() ?: return false
+        val success = service.inputText(node, text)
+        node.recycle()
+        println("[DeviceController] typeToFirstEditable('$text') = $success")
+        return success
     }
 }

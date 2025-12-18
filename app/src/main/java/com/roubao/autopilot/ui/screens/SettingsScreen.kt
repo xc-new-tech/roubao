@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
 import com.google.firebase.crashlytics.FirebaseCrashlytics
 import com.roubao.autopilot.BuildConfig
+import com.roubao.autopilot.accessibility.AutoPilotAccessibilityService
 import com.roubao.autopilot.data.ApiProvider
 import com.roubao.autopilot.data.AppSettings
 import com.roubao.autopilot.ui.theme.BaoziTheme
@@ -59,6 +60,7 @@ fun SettingsScreen(
     onUpdateCloudCrashReport: (Boolean) -> Unit,
     onUpdateRootModeEnabled: (Boolean) -> Unit,
     onUpdateSuCommandEnabled: (Boolean) -> Unit,
+    onUpdateUseAutoGLMMode: (Boolean) -> Unit,
     onSelectProvider: (ApiProvider) -> Unit,
     shizukuAvailable: Boolean,
     shizukuPrivilegeLevel: String = "ADB", // "ADB", "ROOT", "NONE"
@@ -140,6 +142,131 @@ fun SettingsScreen(
                 subtitle = "${settings.maxSteps} 步",
                 onClick = { showMaxStepsDialog = true }
             )
+        }
+
+        // AutoGLM 模式开关
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = colors.backgroundCard)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(colors.primary.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Build,
+                            contentDescription = null,
+                            tint = colors.primary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "AutoGLM 模式",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = colors.textPrimary
+                        )
+                        Text(
+                            text = if (settings.useAutoGLMMode) "使用优化后的单循环 Agent" else "使用原始三层 Agent",
+                            fontSize = 13.sp,
+                            color = colors.textSecondary,
+                            maxLines = 1
+                        )
+                    }
+                    Switch(
+                        checked = settings.useAutoGLMMode,
+                        onCheckedChange = { onUpdateUseAutoGLMMode(it) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = colors.primary,
+                            checkedTrackColor = colors.primary.copy(alpha = 0.5f),
+                            uncheckedThumbColor = colors.textHint,
+                            uncheckedTrackColor = colors.backgroundInput
+                        )
+                    )
+                }
+            }
+        }
+
+        // 无障碍服务设置
+        item {
+            val context = LocalContext.current
+            val isA11yEnabled = AutoPilotAccessibilityService.isServiceEnabled(context)
+
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                    .clickable {
+                        if (!isA11yEnabled) {
+                            AutoPilotAccessibilityService.openSettings(context)
+                        }
+                    },
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = colors.backgroundCard)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(
+                                if (isA11yEnabled) colors.success.copy(alpha = 0.15f)
+                                else colors.warning.copy(alpha = 0.15f)
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (isA11yEnabled) Icons.Default.CheckCircle else Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = if (isA11yEnabled) colors.success else colors.warning,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "无障碍服务",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = colors.textPrimary
+                        )
+                        Text(
+                            text = if (isA11yEnabled) "已开启 - 精准操作模式" else "未开启 - 点击去开启",
+                            fontSize = 13.sp,
+                            color = if (isA11yEnabled) colors.success else colors.textSecondary,
+                            maxLines = 1
+                        )
+                    }
+                    if (!isA11yEnabled) {
+                        Icon(
+                            imageVector = Icons.Default.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = colors.textHint,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
         }
 
         // Shizuku 高级设置分组（仅在 Shizuku 可用时显示）

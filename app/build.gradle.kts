@@ -79,6 +79,7 @@ dependencies {
 
     // OkHttp for API calls
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
 
     // Shizuku
     implementation("dev.rikka.shizuku:api:13.1.5")

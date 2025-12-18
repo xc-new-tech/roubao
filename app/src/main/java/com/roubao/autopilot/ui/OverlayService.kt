@@ -12,11 +12,11 @@ import android.graphics.*
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.IBinder
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
-import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -24,42 +24,35 @@ import com.roubao.autopilot.MainActivity
 import com.roubao.autopilot.R
 
 /**
- * 七彩悬浮窗服务 - 显示当前执行步骤
- * 放在屏幕顶部状态栏下方，不影响截图识别
+ * 简洁圆形悬浮按钮 - 开始/停止控制
  */
 class OverlayService : Service() {
 
     private var windowManager: WindowManager? = null
     private var overlayView: View? = null
-    private var textView: TextView? = null
-    private var actionButton: TextView? = null
-    private var cancelButton: TextView? = null  // 确认模式下的取消按钮
-    private var divider: View? = null
-    private var divider2: View? = null  // 确认模式下第二个分隔线
+    private var buttonView: TextView? = null
     private var animator: ValueAnimator? = null
 
     companion object {
         private var instance: OverlayService? = null
         private var stopCallback: (() -> Unit)? = null
         private var continueCallback: (() -> Unit)? = null
-        private var confirmCallback: ((Boolean) -> Unit)? = null  // 敏感操作确认回调
+        private var confirmCallback: ((Boolean) -> Unit)? = null
         private var isTakeOverMode = false
-        private var isConfirmMode = false  // 敏感操作确认模式
+        private var isConfirmMode = false
 
-        // 等待 instance 回调队列
         private val pendingCallbacks = mutableListOf<() -> Unit>()
 
         fun show(context: Context, text: String, onStop: (() -> Unit)? = null) {
             stopCallback = onStop
             isTakeOverMode = false
             isConfirmMode = false
-            instance?.updateText(text) ?: run {
-                val intent = Intent(context, OverlayService::class.java).apply {
-                    putExtra("text", text)
-                }
+            if (instance != null) {
+                instance?.setNormalMode()
+            } else {
+                val intent = Intent(context, OverlayService::class.java)
                 ContextCompat.startForegroundService(context, intent)
             }
-            instance?.setNormalMode()
         }
 
         fun hide(context: Context) {
@@ -69,15 +62,28 @@ class OverlayService : Service() {
             isTakeOverMode = false
             isConfirmMode = false
             pendingCallbacks.clear()
-            // 只有当 service 已经启动完成时才停止它
-            // 否则会导致 ForegroundServiceDidNotStartInTimeException
             if (instance != null) {
                 context.stopService(Intent(context, OverlayService::class.java))
             }
         }
 
         fun update(text: String) {
-            instance?.updateText(text)
+            // 简化版不显示文字，忽略
+        }
+
+        /** 更新思考内容 - 简化版忽略 */
+        fun updateThinking(chunk: String, append: Boolean = true) {
+            // 简化版不显示思考内容
+        }
+
+        /** 清空思考内容 - 简化版忽略 */
+        fun clearThinking() {
+            // 简化版不显示思考内容
+        }
+
+        /** 显示性能指标 - 简化版忽略 */
+        fun showMetrics(ttftMs: Long?, totalMs: Long) {
+            // 简化版不显示指标
         }
 
         /** 截图时临时隐藏悬浮窗 */
@@ -87,49 +93,29 @@ class OverlayService : Service() {
             }
         }
 
-        /** 显示人机协作模式 - 等待用户手动完成操作 */
+        /** 显示人机协作模式 */
         fun showTakeOver(message: String, onContinue: () -> Unit) {
             val action: () -> Unit = {
-                println("[OverlayService] showTakeOver: $message")
                 continueCallback = onContinue
                 isTakeOverMode = true
                 isConfirmMode = false
-                instance?.setTakeOverMode(message)
-                Unit
+                instance?.setTakeOverMode()
             }
-
-            if (instance != null) {
-                action()
-            } else {
-                // 悬浮窗尚未启动，加入等待队列
-                println("[OverlayService] showTakeOver: instance is null, queuing...")
-                pendingCallbacks.add(action)
-            }
+            if (instance != null) action() else pendingCallbacks.add(action)
         }
 
-        /** 显示敏感操作确认模式 - 用户确认或取消 */
+        /** 显示敏感操作确认模式 */
         fun showConfirm(message: String, onConfirm: (Boolean) -> Unit) {
             val action: () -> Unit = {
-                println("[OverlayService] showConfirm: $message")
                 confirmCallback = onConfirm
                 isConfirmMode = true
                 isTakeOverMode = false
-                instance?.setConfirmMode(message)
-                Unit
+                instance?.setConfirmMode()
             }
-
-            if (instance != null) {
-                action()
-            } else {
-                // 悬浮窗尚未启动，加入等待队列
-                println("[OverlayService] showConfirm: instance is null, queuing...")
-                pendingCallbacks.add(action)
-            }
+            if (instance != null) action() else pendingCallbacks.add(action)
         }
 
-        /** 当 instance 可用时执行等待中的回调 */
         private fun processPendingCallbacks() {
-            println("[OverlayService] processPendingCallbacks: ${pendingCallbacks.size} pending")
             pendingCallbacks.forEach { it.invoke() }
             pendingCallbacks.clear()
         }
@@ -207,8 +193,6 @@ class OverlayService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val text = intent?.getStringExtra("text") ?: "AutoPilot"
-        updateText(text)
         return START_STICKY
     }
 
@@ -219,111 +203,34 @@ class OverlayService : Service() {
         overlayView?.let { windowManager?.removeView(it) }
     }
 
+    /** dp 转 px */
+    private fun dpToPx(dp: Int): Int {
+        return TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_DIP,
+            dp.toFloat(),
+            resources.displayMetrics
+        ).toInt()
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     private fun createOverlayView() {
-        // 容器
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(16, 12, 16, 12)
-        }
+        val buttonSize = dpToPx(52)
 
-        // 七彩渐变背景
+        // 七彩渐变圆形背景
         val gradientDrawable = GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = 30f
-            setStroke(2, Color.WHITE)
+            shape = GradientDrawable.OVAL
+            setStroke(dpToPx(2), Color.WHITE)
         }
-        container.background = gradientDrawable
 
-        // 状态文字
-        textView = TextView(this).apply {
-            text = "肉包"
-            textSize = 13f
+        // 圆形按钮
+        buttonView = TextView(this).apply {
+            text = "⏹"
+            textSize = 20f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            setPadding(16, 4, 16, 4)
             setShadowLayer(4f, 0f, 0f, Color.BLACK)
-            typeface = Typeface.DEFAULT_BOLD
+            background = gradientDrawable
         }
-        container.addView(textView)
-
-        // 分隔线
-        divider = View(this).apply {
-            setBackgroundColor(Color.WHITE)
-            alpha = 0.5f
-        }
-        val dividerParams = LinearLayout.LayoutParams(2, 36).apply {
-            setMargins(12, 0, 12, 0)
-        }
-        container.addView(divider, dividerParams)
-
-        // 动作按钮（停止/继续/确认）
-        actionButton = TextView(this).apply {
-            text = "⏹ 停止"
-            textSize = 13f
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            setPadding(16, 4, 16, 4)
-            setShadowLayer(4f, 0f, 0f, Color.BLACK)
-            typeface = Typeface.DEFAULT_BOLD
-            setOnClickListener {
-                when {
-                    isConfirmMode -> {
-                        // 确认模式：点击确认
-                        confirmCallback?.invoke(true)
-                        confirmCallback = null
-                        isConfirmMode = false
-                        setNormalMode()
-                    }
-                    isTakeOverMode -> {
-                        // 人机协作模式：点击继续
-                        continueCallback?.invoke()
-                        continueCallback = null
-                        isTakeOverMode = false
-                        setNormalMode()
-                    }
-                    else -> {
-                        // 正常模式：点击停止
-                        stopCallback?.invoke()
-                        hide(this@OverlayService)
-                    }
-                }
-            }
-        }
-        container.addView(actionButton)
-
-        // 第二个分隔线（确认模式用）
-        divider2 = View(this).apply {
-            setBackgroundColor(Color.WHITE)
-            alpha = 0.5f
-            visibility = View.GONE
-        }
-        val divider2Params = LinearLayout.LayoutParams(2, 36).apply {
-            setMargins(12, 0, 12, 0)
-        }
-        container.addView(divider2, divider2Params)
-
-        // 取消按钮（确认模式用）
-        cancelButton = TextView(this).apply {
-            text = "❌ 取消"
-            textSize = 13f
-            setTextColor(Color.parseColor("#FF6B6B"))  // 红色
-            gravity = Gravity.CENTER
-            setPadding(16, 4, 16, 4)
-            setShadowLayer(4f, 0f, 0f, Color.BLACK)
-            typeface = Typeface.DEFAULT_BOLD
-            visibility = View.GONE
-            setOnClickListener {
-                if (isConfirmMode) {
-                    confirmCallback?.invoke(false)
-                    confirmCallback = null
-                    isConfirmMode = false
-                    setNormalMode()
-                }
-            }
-        }
-        container.addView(cancelButton)
 
         // 动画：七彩渐变流动效果
         startRainbowAnimation(gradientDrawable)
@@ -338,25 +245,24 @@ class OverlayService : Service() {
             flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON  // 保持屏幕常亮
+                    WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
             format = PixelFormat.TRANSLUCENT
-            width = WindowManager.LayoutParams.WRAP_CONTENT
-            height = WindowManager.LayoutParams.WRAP_CONTENT
+            width = buttonSize
+            height = buttonSize
             gravity = Gravity.TOP or Gravity.START
-            x = 100
-            y = 200
+            x = dpToPx(16)
+            y = dpToPx(200)
         }
 
-        // 添加拖动功能（只拦截文字区域，不影响按钮点击）
+        // 添加拖动和点击功能
         var initialX = 0
         var initialY = 0
         var initialTouchX = 0f
         var initialTouchY = 0f
         var isDragging = false
-        val dragThreshold = 20f  // 增大阈值，避免误触
+        val dragThreshold = dpToPx(10).toFloat()
 
-        // 只在文字区域启用拖动，按钮区域不拦截
-        textView?.setOnTouchListener { _, event ->
+        buttonView?.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
                     initialX = params.x
@@ -375,19 +281,47 @@ class OverlayService : Service() {
                     if (isDragging) {
                         params.x = initialX + deltaX.toInt()
                         params.y = initialY + deltaY.toInt()
-                        windowManager?.updateViewLayout(container, params)
+                        windowManager?.updateViewLayout(buttonView, params)
                     }
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    isDragging
+                    if (!isDragging) {
+                        handleButtonClick()
+                    }
+                    true
                 }
                 else -> false
             }
         }
 
-        overlayView = container
+        overlayView = buttonView
         windowManager?.addView(overlayView, params)
+    }
+
+    /** 处理按钮点击 */
+    private fun handleButtonClick() {
+        when {
+            isConfirmMode -> {
+                // 确认模式：点击确认
+                confirmCallback?.invoke(true)
+                confirmCallback = null
+                isConfirmMode = false
+                setNormalMode()
+            }
+            isTakeOverMode -> {
+                // 人机协作模式：点击继续
+                continueCallback?.invoke()
+                continueCallback = null
+                isTakeOverMode = false
+                setNormalMode()
+            }
+            else -> {
+                // 正常模式：点击停止
+                stopCallback?.invoke()
+                hide(this@OverlayService)
+            }
+        }
     }
 
     private fun startRainbowAnimation(drawable: GradientDrawable) {
@@ -451,51 +385,29 @@ class OverlayService : Service() {
         )
     }
 
-    private fun updateText(text: String) {
-        textView?.post {
-            textView?.text = text
-        }
-    }
-
-    /** 切换到人机协作模式 */
-    private fun setTakeOverMode(message: String) {
-        println("[OverlayService] setTakeOverMode: $message")
-        overlayView?.post {
-            // 确保悬浮窗可见
+    /** 切换到人机协作模式 - 显示绿色继续图标 */
+    private fun setTakeOverMode() {
+        buttonView?.post {
             overlayView?.visibility = View.VISIBLE
-            textView?.text = "🖐 $message"
-            actionButton?.text = "✅ 继续"
-            actionButton?.setTextColor(Color.parseColor("#90EE90")) // 浅绿色
-            // 隐藏取消按钮（人机协作只有继续按钮）
-            divider2?.visibility = View.GONE
-            cancelButton?.visibility = View.GONE
+            buttonView?.text = "▶"
+            buttonView?.setTextColor(Color.parseColor("#90EE90"))  // 浅绿色
         }
     }
 
-    /** 切换到正常模式 */
+    /** 切换到正常模式 - 显示白色停止图标 */
     private fun setNormalMode() {
-        println("[OverlayService] setNormalMode")
-        overlayView?.post {
-            actionButton?.text = "⏹ 停止"
-            actionButton?.setTextColor(Color.WHITE)
-            // 隐藏取消按钮和第二分隔线
-            divider2?.visibility = View.GONE
-            cancelButton?.visibility = View.GONE
+        buttonView?.post {
+            buttonView?.text = "⏹"
+            buttonView?.setTextColor(Color.WHITE)
         }
     }
 
-    /** 切换到敏感操作确认模式 */
-    private fun setConfirmMode(message: String) {
-        println("[OverlayService] setConfirmMode: $message")
-        overlayView?.post {
-            // 确保悬浮窗可见
+    /** 切换到敏感操作确认模式 - 显示黄色确认图标 */
+    private fun setConfirmMode() {
+        buttonView?.post {
             overlayView?.visibility = View.VISIBLE
-            textView?.text = "⚠️ $message"
-            actionButton?.text = "✅ 确认"
-            actionButton?.setTextColor(Color.parseColor("#90EE90"))  // 浅绿色
-            // 显示取消按钮和第二分隔线
-            divider2?.visibility = View.VISIBLE
-            cancelButton?.visibility = View.VISIBLE
+            buttonView?.text = "✓"
+            buttonView?.setTextColor(Color.parseColor("#FFE066"))  // 黄色
         }
     }
 }

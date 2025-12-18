@@ -38,9 +38,9 @@ data class ApiProvider(
         )
         val CUSTOM = ApiProvider(
             id = "custom",
-            name = "自定义",
-            baseUrl = "",
-            defaultModel = ""
+            name = "自定义 (智谱测试)",
+            baseUrl = DEFAULT_BASE_URL,
+            defaultModel = DEFAULT_MODEL
         )
 
         val ALL = listOf(ALIYUN, OPENAI, OPENROUTER, CUSTOM)
@@ -58,22 +58,25 @@ data class ProviderConfig(
 )
 
 /**
- * 默认推荐模型
+ * 默认配置 (API Key 需要用户在设置中配置)
  */
-const val DEFAULT_MODEL = "qwen3-vl-plus"
+const val DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
+const val DEFAULT_MODEL = "autoglm-phone"
+const val DEFAULT_API_KEY = ""  // 需要用户在设置中配置
 
 /**
  * 应用设置
  */
 data class AppSettings(
-    val currentProviderId: String = ApiProvider.ALIYUN.id,  // 当前选中的服务商
+    val currentProviderId: String = ApiProvider.CUSTOM.id,  // 当前选中的服务商 (测试阶段默认智谱)
     val providerConfigs: Map<String, ProviderConfig> = emptyMap(),  // 每个服务商的配置
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val hasSeenOnboarding: Boolean = false,
     val maxSteps: Int = 25,
     val cloudCrashReportEnabled: Boolean = true,
     val rootModeEnabled: Boolean = false,
-    val suCommandEnabled: Boolean = false
+    val suCommandEnabled: Boolean = false,
+    val useAutoGLMMode: Boolean = true  // 是否使用 AutoGLM 模式 (默认开启)
 ) {
     // 便捷属性：获取当前服务商的配置
     val currentConfig: ProviderConfig
@@ -154,8 +157,8 @@ class SettingsManager(context: Context) {
             ThemeMode.DARK
         }
 
-        // 加载当前选中的服务商
-        val currentProviderId = prefs.getString("current_provider_id", ApiProvider.ALIYUN.id) ?: ApiProvider.ALIYUN.id
+        // 加载当前选中的服务商 (测试阶段默认使用自定义/智谱)
+        val currentProviderId = prefs.getString("current_provider_id", ApiProvider.CUSTOM.id) ?: ApiProvider.CUSTOM.id
 
         // 加载每个服务商的配置
         val providerConfigs = mutableMapOf<String, ProviderConfig>()
@@ -209,7 +212,8 @@ class SettingsManager(context: Context) {
             maxSteps = prefs.getInt("max_steps", 25),
             cloudCrashReportEnabled = prefs.getBoolean("cloud_crash_report_enabled", true),
             rootModeEnabled = prefs.getBoolean("root_mode_enabled", false),
-            suCommandEnabled = prefs.getBoolean("su_command_enabled", false)
+            suCommandEnabled = prefs.getBoolean("su_command_enabled", false),
+            useAutoGLMMode = prefs.getBoolean("use_autoglm_mode", true)
         )
     }
 
@@ -218,11 +222,25 @@ class SettingsManager(context: Context) {
      */
     private fun loadProviderConfig(providerId: String): ProviderConfig {
         val prefix = "provider_${providerId}_"
+        val apiKey = securePrefs.getString("${prefix}api_key", "") ?: ""
+        val model = prefs.getString("${prefix}model", "") ?: ""
+        val customBaseUrl = prefs.getString("${prefix}custom_base_url", "") ?: ""
+
+        // 测试阶段：自定义服务商使用预设值
+        if (providerId == "custom") {
+            return ProviderConfig(
+                apiKey = apiKey.ifEmpty { DEFAULT_API_KEY },
+                model = model.ifEmpty { DEFAULT_MODEL },
+                cachedModels = prefs.getStringSet("${prefix}cached_models", emptySet())?.toList() ?: emptyList(),
+                customBaseUrl = customBaseUrl.ifEmpty { DEFAULT_BASE_URL }
+            )
+        }
+
         return ProviderConfig(
-            apiKey = securePrefs.getString("${prefix}api_key", "") ?: "",
-            model = prefs.getString("${prefix}model", "") ?: "",
+            apiKey = apiKey,
+            model = model,
             cachedModels = prefs.getStringSet("${prefix}cached_models", emptySet())?.toList() ?: emptyList(),
-            customBaseUrl = prefs.getString("${prefix}custom_base_url", "") ?: ""
+            customBaseUrl = customBaseUrl
         )
     }
 
@@ -339,5 +357,10 @@ class SettingsManager(context: Context) {
     fun updateSuCommandEnabled(enabled: Boolean) {
         prefs.edit().putBoolean("su_command_enabled", enabled).apply()
         _settings.value = _settings.value.copy(suCommandEnabled = enabled)
+    }
+
+    fun updateUseAutoGLMMode(enabled: Boolean) {
+        prefs.edit().putBoolean("use_autoglm_mode", enabled).apply()
+        _settings.value = _settings.value.copy(useAutoGLMMode = enabled)
     }
 }
