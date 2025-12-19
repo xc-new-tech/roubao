@@ -497,6 +497,9 @@ fun HistoryDetailScreen(
             }
         }
 
+        // 执行报告卡片
+        ExecutionReportCard(record = record)
+
         // Tab 切换
         Row(
             modifier = Modifier
@@ -754,4 +757,258 @@ private fun copyToClipboard(context: Context, text: String, toastMessage: String
     val clip = ClipData.newPlainText("roubao_log", text)
     clipboard.setPrimaryClip(clip)
     Toast.makeText(context, toastMessage, Toast.LENGTH_SHORT).show()
+}
+
+/**
+ * 执行报告卡片 - 紧扣用户指令，复盘执行情况
+ */
+@Composable
+fun ExecutionReportCard(record: ExecutionRecord) {
+    val colors = BaoziTheme.colors
+
+    // 生成执行报告内容
+    val reportContent = generateExecutionReport(record)
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .padding(bottom = 12.dp),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = colors.backgroundCard)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            // 标题行
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // 状态图标
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(
+                            when (record.status) {
+                                ExecutionStatus.COMPLETED -> colors.success.copy(alpha = 0.15f)
+                                ExecutionStatus.FAILED -> colors.error.copy(alpha = 0.15f)
+                                ExecutionStatus.STOPPED -> colors.warning.copy(alpha = 0.15f)
+                                ExecutionStatus.RUNNING -> colors.primary.copy(alpha = 0.15f)
+                            }
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = when (record.status) {
+                            ExecutionStatus.COMPLETED -> "✓"
+                            ExecutionStatus.FAILED -> "✗"
+                            ExecutionStatus.STOPPED -> "⏹"
+                            ExecutionStatus.RUNNING -> "▶"
+                        },
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = when (record.status) {
+                            ExecutionStatus.COMPLETED -> colors.success
+                            ExecutionStatus.FAILED -> colors.error
+                            ExecutionStatus.STOPPED -> colors.warning
+                            ExecutionStatus.RUNNING -> colors.primary
+                        }
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "执行报告",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = colors.textPrimary
+                    )
+                    Text(
+                        text = when (record.status) {
+                            ExecutionStatus.COMPLETED -> "任务已完成"
+                            ExecutionStatus.FAILED -> "任务执行失败"
+                            ExecutionStatus.STOPPED -> "任务被中止"
+                            ExecutionStatus.RUNNING -> "任务执行中"
+                        },
+                        fontSize = 12.sp,
+                        color = colors.textSecondary
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // 分隔线
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(colors.textHint.copy(alpha = 0.2f))
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // 报告内容
+            Text(
+                text = reportContent,
+                fontSize = 14.sp,
+                color = colors.textPrimary,
+                lineHeight = 22.sp
+            )
+
+            // 如果有结果消息，显示
+            if (record.resultMessage.isNotBlank() &&
+                record.resultMessage != "任务完成" &&
+                record.resultMessage != "已取消") {
+                Spacer(modifier = Modifier.height(12.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(
+                            when (record.status) {
+                                ExecutionStatus.COMPLETED -> colors.success.copy(alpha = 0.1f)
+                                ExecutionStatus.FAILED -> colors.error.copy(alpha = 0.1f)
+                                else -> colors.warning.copy(alpha = 0.1f)
+                            }
+                        )
+                        .padding(12.dp)
+                ) {
+                    Text(
+                        text = record.resultMessage,
+                        fontSize = 13.sp,
+                        color = when (record.status) {
+                            ExecutionStatus.COMPLETED -> colors.success
+                            ExecutionStatus.FAILED -> colors.error
+                            else -> colors.warning
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 生成执行报告内容
+ */
+private fun generateExecutionReport(record: ExecutionRecord): String {
+    val instruction = record.instruction
+    val status = record.status
+    val stepCount = record.steps.size.takeIf { it > 0 } ?: extractStepCountFromLogs(record.logs)
+    val duration = record.formattedDuration
+
+    // 分析执行日志，提取关键操作
+    val keyActions = extractKeyActions(record.logs)
+
+    val sb = StringBuilder()
+
+    // 开头：紧扣用户指令
+    sb.append("针对您的指令「$instruction」，")
+
+    when (status) {
+        ExecutionStatus.COMPLETED -> {
+            sb.append("肉包已成功完成任务。\n\n")
+            sb.append("📊 执行概况：共执行 $stepCount 个步骤，耗时 $duration。\n")
+            if (keyActions.isNotEmpty()) {
+                sb.append("\n🔑 关键操作：\n")
+                keyActions.take(5).forEachIndexed { index, action ->
+                    sb.append("${index + 1}. $action\n")
+                }
+            }
+        }
+        ExecutionStatus.FAILED -> {
+            sb.append("任务执行过程中遇到问题未能完成。\n\n")
+            sb.append("📊 执行概况：执行了 $stepCount 个步骤，耗时 $duration。\n")
+            if (keyActions.isNotEmpty()) {
+                sb.append("\n🔑 已完成的操作：\n")
+                keyActions.take(3).forEachIndexed { index, action ->
+                    sb.append("${index + 1}. $action\n")
+                }
+            }
+            sb.append("\n💡 建议：可以检查网络连接、应用状态后重试。")
+        }
+        ExecutionStatus.STOPPED -> {
+            sb.append("任务已被手动停止。\n\n")
+            sb.append("📊 执行概况：停止前执行了 $stepCount 个步骤，耗时 $duration。\n")
+            if (keyActions.isNotEmpty()) {
+                sb.append("\n🔑 已完成的操作：\n")
+                keyActions.take(3).forEachIndexed { index, action ->
+                    sb.append("${index + 1}. $action\n")
+                }
+            }
+        }
+        ExecutionStatus.RUNNING -> {
+            sb.append("任务正在执行中...\n\n")
+            sb.append("📊 当前进度：已执行 $stepCount 个步骤。")
+        }
+    }
+
+    return sb.toString().trim()
+}
+
+/**
+ * 从日志中提取步骤数
+ */
+private fun extractStepCountFromLogs(logs: List<String>): Int {
+    var maxStep = 0
+    for (log in logs) {
+        if (log.contains("Step") || log.contains("步骤")) {
+            val match = Regex("""(?:Step|步骤)\s*(\d+)""").find(log)
+            match?.groupValues?.getOrNull(1)?.toIntOrNull()?.let {
+                if (it > maxStep) maxStep = it
+            }
+        }
+    }
+    return maxStep
+}
+
+/**
+ * 从日志中提取关键操作
+ */
+private fun extractKeyActions(logs: List<String>): List<String> {
+    val actions = mutableListOf<String>()
+
+    for (log in logs) {
+        when {
+            // 应用启动
+            log.contains("Launch") || log.contains("打开") -> {
+                val appMatch = Regex("""(?:Launch|打开)[:\s]*[{]?(?:app[=:]\s*)?([^}\n,]+)""").find(log)
+                appMatch?.groupValues?.getOrNull(1)?.let { app ->
+                    actions.add("打开应用「${app.trim()}」")
+                }
+            }
+            // 点击操作
+            log.contains("Tap") && log.contains("动作:") -> {
+                actions.add("执行点击操作")
+            }
+            // 输入操作
+            (log.contains("Type") || log.contains("输入")) && log.contains("动作:") -> {
+                val textMatch = Regex("""text[=:]\s*([^}\n,]+)""").find(log)
+                textMatch?.groupValues?.getOrNull(1)?.let { text ->
+                    val displayText = if (text.length > 20) text.take(20) + "..." else text
+                    actions.add("输入文本「$displayText」")
+                }
+            }
+            // 滑动操作
+            log.contains("Swipe") || log.contains("滑动") -> {
+                actions.add("执行滑动操作")
+            }
+            // 返回操作
+            log.contains("Back") && log.contains("动作:") -> {
+                actions.add("返回上一页")
+            }
+            // 完成
+            log.contains("Finish") || log.contains("完成:") -> {
+                val msgMatch = Regex("""(?:Finish|完成)[:\s]*(.+)""").find(log)
+                msgMatch?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() && it != "{}" }?.let {
+                    actions.add("完成: ${it.trim()}")
+                }
+            }
+        }
+    }
+
+    return actions.distinct()
 }
