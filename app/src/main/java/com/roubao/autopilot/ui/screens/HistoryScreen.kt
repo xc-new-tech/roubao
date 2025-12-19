@@ -358,12 +358,14 @@ fun HistoryDetailScreen(
         )
     }
 
+    val context = LocalContext.current
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(colors.background)
     ) {
-        // 顶部栏
+        // 顶部栏 (固定)
         TopAppBar(
             title = {
                 Column {
@@ -394,236 +396,245 @@ fun HistoryDetailScreen(
             )
         )
 
-        // 任务信息卡片
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = colors.backgroundCard)
+        // 可滚动内容区域
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 16.dp)
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = "任务指令",
-                    fontSize = 12.sp,
-                    color = colors.textHint
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = record.instruction,
-                    fontSize = 15.sp,
-                    color = colors.textPrimary
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
+            // 任务信息卡片
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = colors.backgroundCard)
                 ) {
-                    Column {
-                        Text("状态", fontSize = 12.sp, color = colors.textHint)
+                    Column(modifier = Modifier.padding(16.dp)) {
                         Text(
-                            text = when (record.status) {
-                                ExecutionStatus.COMPLETED -> "已完成"
-                                ExecutionStatus.FAILED -> "失败"
-                                ExecutionStatus.STOPPED -> "已停止"
-                                ExecutionStatus.RUNNING -> "执行中"
-                            },
-                            fontSize = 14.sp,
-                            color = when (record.status) {
-                                ExecutionStatus.COMPLETED -> colors.success
-                                ExecutionStatus.FAILED -> colors.error
-                                ExecutionStatus.STOPPED -> colors.warning
-                                ExecutionStatus.RUNNING -> colors.primary
-                            }
-                        )
-                    }
-                    Column {
-                        Text("步骤数", fontSize = 12.sp, color = colors.textHint)
-                        Text("${record.steps.size}", fontSize = 14.sp, color = colors.textPrimary)
-                    }
-                    Column {
-                        Text("耗时", fontSize = 12.sp, color = colors.textHint)
-                        Text(record.formattedDuration, fontSize = 14.sp, color = colors.textPrimary)
-                    }
-                }
-
-                // 操作按钮
-                Spacer(modifier = Modifier.height(16.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    // 重复执行按钮
-                    Button(
-                        onClick = { onRerun(record.instruction) },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = colors.primary
-                        ),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.PlayArrow,
-                            contentDescription = null,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = "重复执行",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-
-                    // 保存为脚本按钮
-                    if (onSaveAsScript != null && record.status == ExecutionStatus.COMPLETED) {
-                        OutlinedButton(
-                            onClick = { showSaveScriptDialog = true },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = colors.secondary
-                            ),
-                            border = BorderStroke(1.dp, colors.secondary),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Text(
-                                text = "📜 保存为脚本",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // 执行报告卡片
-        ExecutionReportCard(record = record)
-
-        // Tab 切换
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            // 时间线 Tab
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(
-                        if (selectedTab == 0) colors.primary
-                        else colors.backgroundCard
-                    )
-                    .clickable { selectedTab = 0 }
-                    .padding(vertical = 12.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "执行时间线",
-                    fontSize = 14.sp,
-                    fontWeight = if (selectedTab == 0) FontWeight.Medium else FontWeight.Normal,
-                    color = if (selectedTab == 0) Color.White else colors.textSecondary
-                )
-            }
-
-            // 日志 Tab
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(
-                        if (selectedTab == 1) colors.primary
-                        else colors.backgroundCard
-                    )
-                    .clickable { selectedTab = 1 }
-                    .padding(vertical = 12.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "执行日志",
-                    fontSize = 14.sp,
-                    fontWeight = if (selectedTab == 1) FontWeight.Medium else FontWeight.Normal,
-                    color = if (selectedTab == 1) Color.White else colors.textSecondary
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // 内容区域
-        when (selectedTab) {
-            0 -> {
-                // 时间线列表
-                if (record.steps.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(32.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "暂无执行步骤",
-                            fontSize = 14.sp,
+                            text = "任务指令",
+                            fontSize = 12.sp,
                             color = colors.textHint
                         )
-                    }
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-                    ) {
-                        items(record.steps) { step ->
-                            TimelineItem(step = step, isLast = step == record.steps.lastOrNull())
-                        }
-                    }
-                }
-            }
-            1 -> {
-                // 日志列表
-                val context = LocalContext.current
-                if (record.logs.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(32.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
+                        Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "暂无执行日志",
-                            fontSize = 14.sp,
-                            color = colors.textHint
+                            text = record.instruction,
+                            fontSize = 15.sp,
+                            color = colors.textPrimary
                         )
-                    }
-                } else {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        // 复制全部按钮
+                        Spacer(modifier = Modifier.height(12.dp))
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.End
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            TextButton(
-                                onClick = {
-                                    val allLogs = record.logs.joinToString("\n")
-                                    copyToClipboard(context, allLogs, "已复制全部日志")
+                            Column {
+                                Text("状态", fontSize = 12.sp, color = colors.textHint)
+                                Text(
+                                    text = when (record.status) {
+                                        ExecutionStatus.COMPLETED -> "已完成"
+                                        ExecutionStatus.FAILED -> "失败"
+                                        ExecutionStatus.STOPPED -> "已停止"
+                                        ExecutionStatus.RUNNING -> "执行中"
+                                    },
+                                    fontSize = 14.sp,
+                                    color = when (record.status) {
+                                        ExecutionStatus.COMPLETED -> colors.success
+                                        ExecutionStatus.FAILED -> colors.error
+                                        ExecutionStatus.STOPPED -> colors.warning
+                                        ExecutionStatus.RUNNING -> colors.primary
+                                    }
+                                )
+                            }
+                            Column {
+                                Text("步骤数", fontSize = 12.sp, color = colors.textHint)
+                                Text("${record.steps.size}", fontSize = 14.sp, color = colors.textPrimary)
+                            }
+                            Column {
+                                Text("耗时", fontSize = 12.sp, color = colors.textHint)
+                                Text(record.formattedDuration, fontSize = 14.sp, color = colors.textPrimary)
+                            }
+                        }
+
+                        // 操作按钮
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            // 重复执行按钮
+                            Button(
+                                onClick = { onRerun(record.instruction) },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = colors.primary
+                                ),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PlayArrow,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "重复执行",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+
+                            // 保存为脚本按钮
+                            if (onSaveAsScript != null && record.status == ExecutionStatus.COMPLETED) {
+                                OutlinedButton(
+                                    onClick = { showSaveScriptDialog = true },
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = colors.secondary
+                                    ),
+                                    border = BorderStroke(1.dp, colors.secondary),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text(
+                                        text = "📜 保存为脚本",
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 执行报告卡片
+            item {
+                ExecutionReportCard(record = record)
+            }
+
+            // Tab 切换
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // 时间线 Tab
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(
+                                if (selectedTab == 0) colors.primary
+                                else colors.backgroundCard
+                            )
+                            .clickable { selectedTab = 0 }
+                            .padding(vertical = 12.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "执行时间线",
+                            fontSize = 14.sp,
+                            fontWeight = if (selectedTab == 0) FontWeight.Medium else FontWeight.Normal,
+                            color = if (selectedTab == 0) Color.White else colors.textSecondary
+                        )
+                    }
+
+                    // 日志 Tab
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(
+                                if (selectedTab == 1) colors.primary
+                                else colors.backgroundCard
+                            )
+                            .clickable { selectedTab = 1 }
+                            .padding(vertical = 12.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "执行日志",
+                            fontSize = 14.sp,
+                            fontWeight = if (selectedTab == 1) FontWeight.Medium else FontWeight.Normal,
+                            color = if (selectedTab == 1) Color.White else colors.textSecondary
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
+            // 内容区域
+            when (selectedTab) {
+                0 -> {
+                    // 时间线列表
+                    if (record.steps.isEmpty()) {
+                        item {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(32.dp),
+                                contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = "📋 复制全部",
-                                    fontSize = 13.sp,
-                                    color = colors.primary
+                                    text = "暂无执行步骤",
+                                    fontSize = 14.sp,
+                                    color = colors.textHint
                                 )
                             }
                         }
+                    } else {
+                        items(record.steps) { step ->
+                            Box(modifier = Modifier.padding(horizontal = 16.dp)) {
+                                TimelineItem(step = step, isLast = step == record.steps.lastOrNull())
+                            }
+                        }
+                    }
+                }
+                1 -> {
+                    // 日志列表
+                    if (record.logs.isEmpty()) {
+                        item {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(32.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "暂无执行日志",
+                                    fontSize = 14.sp,
+                                    color = colors.textHint
+                                )
+                            }
+                        }
+                    } else {
+                        // 复制全部按钮
+                        item {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                TextButton(
+                                    onClick = {
+                                        val allLogs = record.logs.joinToString("\n")
+                                        copyToClipboard(context, allLogs, "已复制全部日志")
+                                    }
+                                ) {
+                                    Text(
+                                        text = "📋 复制全部",
+                                        fontSize = 13.sp,
+                                        color = colors.primary
+                                    )
+                                }
+                            }
+                        }
 
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)
-                        ) {
-                            items(record.logs) { log ->
+                        items(record.logs) { log ->
+                            Box(modifier = Modifier.padding(horizontal = 16.dp)) {
                                 LogItem(log = log, context = context)
                             }
                         }
