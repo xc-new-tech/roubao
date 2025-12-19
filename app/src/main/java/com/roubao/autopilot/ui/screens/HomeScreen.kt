@@ -38,6 +38,23 @@ import com.roubao.autopilot.ui.theme.Primary
 import com.roubao.autopilot.ui.theme.Secondary
 
 /**
+ * 执行报告
+ */
+data class ExecutionReport(
+    val instruction: String,
+    val success: Boolean,
+    val message: String,
+    val stepCount: Int,
+    val durationMs: Long,
+    val recordId: String
+) {
+    val formattedDuration: String get() {
+        val seconds = durationMs / 1000
+        return if (seconds < 60) "${seconds}秒" else "${seconds / 60}分${seconds % 60}秒"
+    }
+}
+
+/**
  * 预设命令
  */
 data class PresetCommand(
@@ -66,7 +83,10 @@ fun HomeScreen(
     currentModel: String = "",
     onRefreshShizuku: () -> Unit = {},
     onShizukuRequired: () -> Unit = {},
-    isExecuting: Boolean = false
+    isExecuting: Boolean = false,
+    executionReport: ExecutionReport? = null,
+    onDismissReport: () -> Unit = {},
+    onViewReportDetail: (String) -> Unit = {}
 ) {
     val colors = BaoziTheme.colors
     var inputText by remember { mutableStateOf("") }
@@ -150,28 +170,40 @@ fun HomeScreen(
                 .weight(1f)
                 .fillMaxWidth()
         ) {
-            if (isRunning || logs.isNotEmpty()) {
+            when {
+                // 有执行报告时优先显示报告
+                executionReport != null -> {
+                    ExecutionReportView(
+                        report = executionReport,
+                        onDismiss = onDismissReport,
+                        onViewDetail = { onViewReportDetail(executionReport.recordId) },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
                 // 执行中或有日志时显示日志
-                ExecutionLogView(
-                    logs = logs,
-                    isRunning = isRunning,
-                    currentStep = agentState?.currentStep ?: 0,
-                    currentModel = currentModel,
-                    listState = listState,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
+                isRunning || logs.isNotEmpty() -> {
+                    ExecutionLogView(
+                        logs = logs,
+                        isRunning = isRunning,
+                        currentStep = agentState?.currentStep ?: 0,
+                        currentModel = currentModel,
+                        listState = listState,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
                 // 空闲时显示预设命令
-                PresetCommandsView(
-                    onCommandClick = { command ->
-                        if (shizukuAvailable) {
-                            inputText = command
-                        } else {
-                            onShizukuRequired()
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
+                else -> {
+                    PresetCommandsView(
+                        onCommandClick = { command ->
+                            if (shizukuAvailable) {
+                                inputText = command
+                            } else {
+                                onShizukuRequired()
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             }
         }
 
@@ -551,6 +583,198 @@ fun InputArea(
                         modifier = Modifier.size(24.dp)
                     )
                 }
+            }
+        }
+    }
+}
+
+/**
+ * 执行报告视图
+ */
+@Composable
+fun ExecutionReportView(
+    report: ExecutionReport,
+    onDismiss: () -> Unit,
+    onViewDetail: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colors = BaoziTheme.colors
+
+    Column(
+        modifier = modifier
+            .padding(16.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // 状态图标
+        Box(
+            modifier = Modifier
+                .size(80.dp)
+                .clip(CircleShape)
+                .background(
+                    if (report.success) colors.success.copy(alpha = 0.1f)
+                    else colors.error.copy(alpha = 0.1f)
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = if (report.success) "✓" else "✗",
+                fontSize = 40.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (report.success) colors.success else colors.error
+            )
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // 状态文字
+        Text(
+            text = if (report.success) "执行完成" else "执行失败",
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Bold,
+            color = colors.textPrimary
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // 指令
+        Text(
+            text = report.instruction,
+            fontSize = 14.sp,
+            color = colors.textSecondary,
+            maxLines = 2
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // 统计信息卡片
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = colors.backgroundCard)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                // 步骤数
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "${report.stepCount}",
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colors.primary
+                    )
+                    Text(
+                        text = "步骤",
+                        fontSize = 12.sp,
+                        color = colors.textSecondary
+                    )
+                }
+
+                // 分隔线
+                Box(
+                    modifier = Modifier
+                        .width(1.dp)
+                        .height(40.dp)
+                        .background(colors.textHint.copy(alpha = 0.3f))
+                )
+
+                // 耗时
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = report.formattedDuration,
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colors.primary
+                    )
+                    Text(
+                        text = "耗时",
+                        fontSize = 12.sp,
+                        color = colors.textSecondary
+                    )
+                }
+
+                // 分隔线
+                Box(
+                    modifier = Modifier
+                        .width(1.dp)
+                        .height(40.dp)
+                        .background(colors.textHint.copy(alpha = 0.3f))
+                )
+
+                // 状态
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = if (report.success) "成功" else "失败",
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (report.success) colors.success else colors.error
+                    )
+                    Text(
+                        text = "结果",
+                        fontSize = 12.sp,
+                        color = colors.textSecondary
+                    )
+                }
+            }
+        }
+
+        // 消息
+        if (report.message.isNotBlank() && report.message != "任务完成") {
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = report.message,
+                fontSize = 13.sp,
+                color = colors.textSecondary,
+                maxLines = 2
+            )
+        }
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        // 按钮
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // 查看详情按钮
+            OutlinedButton(
+                onClick = onViewDetail,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp),
+                shape = RoundedCornerShape(24.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = colors.primary
+                )
+            ) {
+                Text(
+                    text = "查看详情",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
+            // 完成按钮
+            Button(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp),
+                shape = RoundedCornerShape(24.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colors.primary
+                )
+            ) {
+                Text(
+                    text = "完成",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Color.White
+                )
             }
         }
     }

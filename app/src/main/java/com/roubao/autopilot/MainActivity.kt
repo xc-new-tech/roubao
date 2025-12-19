@@ -86,6 +86,9 @@ class MainActivity : ComponentActivity() {
     // 是否需要跳转到记录详情（悬浮窗停止后触发）
     private val shouldNavigateToRecord = mutableStateOf(false)
 
+    // 执行完成报告（用于显示汇总）
+    private val executionReport = mutableStateOf<ExecutionReport?>(null)
+
     private val binderReceivedListener = Shizuku.OnBinderReceivedListener {
         Log.d(TAG, "Shizuku binder received")
         shizukuAvailable.value = true
@@ -199,6 +202,7 @@ class MainActivity : ComponentActivity() {
         val executing by remember { isExecuting }
         val navigateToRecord by remember { shouldNavigateToRecord }
         val recordId by remember { currentRecordId }
+        val report by remember { executionReport }
 
         // 监听跳转事件
         LaunchedEffect(navigateToRecord, recordId) {
@@ -322,7 +326,17 @@ class MainActivity : ComponentActivity() {
                                     currentModel = settings.model,
                                     onRefreshShizuku = { refreshShizukuStatus() },
                                     onShizukuRequired = { showShizukuHelpDialog = true },
-                                    isExecuting = executing
+                                    isExecuting = executing,
+                                    executionReport = report,
+                                    onDismissReport = { executionReport.value = null },
+                                    onViewReportDetail = { id ->
+                                        executionReport.value = null
+                                        val record = records.find { it.id == id }
+                                        if (record != null) {
+                                            selectedRecord = record
+                                            currentScreen = Screen.History
+                                        }
+                                    }
                                 )
                             }
                             Screen.Scripts -> ScriptsScreen(
@@ -564,8 +578,9 @@ class MainActivity : ComponentActivity() {
                 scriptLogs.add("消息: ${result.message}")
                 scriptLogs.add("步骤数: ${result.stepCount}")
 
+                val endTime = System.currentTimeMillis()
                 val updatedRecord = record.copy(
-                    endTime = System.currentTimeMillis(),
+                    endTime = endTime,
                     status = if (result.success) ExecutionStatus.COMPLETED else ExecutionStatus.FAILED,
                     logs = scriptLogs,
                     resultMessage = result.message
@@ -573,13 +588,15 @@ class MainActivity : ComponentActivity() {
                 executionRepository.saveRecord(updatedRecord)
                 executionRecords.value = executionRepository.getAllRecords()
 
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(
-                        this@MainActivity,
-                        if (result.success) "脚本执行完成" else "脚本执行失败: ${result.message}",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
+                // 设置执行报告
+                executionReport.value = ExecutionReport(
+                    instruction = "📜 ${script.name}",
+                    success = result.success,
+                    message = result.message,
+                    stepCount = result.stepCount,
+                    durationMs = endTime - record.startTime,
+                    recordId = record.id
+                )
 
             } catch (e: CancellationException) {
                 withContext(kotlinx.coroutines.NonCancellable) {
@@ -929,8 +946,9 @@ class MainActivity : ComponentActivity() {
             try {
                 val result = agent.run(instruction, callback)
 
+                val endTime = System.currentTimeMillis()
                 val updatedRecord = record.copy(
-                    endTime = System.currentTimeMillis(),
+                    endTime = endTime,
                     status = if (result.success) ExecutionStatus.COMPLETED else ExecutionStatus.FAILED,
                     logs = agentLogs,
                     resultMessage = result.message
@@ -938,11 +956,18 @@ class MainActivity : ComponentActivity() {
                 executionRepository.saveRecord(updatedRecord)
                 executionRecords.value = executionRepository.getAllRecords()
 
-                Toast.makeText(this@MainActivity, result.message, Toast.LENGTH_LONG).show()
                 isExecuting.value = false
-
-                kotlinx.coroutines.delay(2000)
                 OverlayService.hide(this@MainActivity)
+
+                // 设置执行报告
+                executionReport.value = ExecutionReport(
+                    instruction = instruction,
+                    success = result.success,
+                    message = result.message,
+                    stepCount = result.stepCount,
+                    durationMs = endTime - record.startTime,
+                    recordId = record.id
+                )
 
             } catch (e: kotlinx.coroutines.CancellationException) {
                 kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
@@ -1003,12 +1028,13 @@ class MainActivity : ComponentActivity() {
                 val result = mobileAgent.value!!.runInstruction(instruction, maxSteps)
 
                 // 更新记录状态
+                val endTime = System.currentTimeMillis()
                 val agentState = mobileAgent.value?.state?.value
                 val steps = agentState?.executionSteps ?: emptyList()
                 val currentLogs = mobileAgent.value?.logs?.value ?: emptyList()
 
                 val updatedRecord = record.copy(
-                    endTime = System.currentTimeMillis(),
+                    endTime = endTime,
                     status = if (result.success) ExecutionStatus.COMPLETED else ExecutionStatus.FAILED,
                     steps = steps,
                     logs = currentLogs,
@@ -1017,14 +1043,19 @@ class MainActivity : ComponentActivity() {
                 executionRepository.saveRecord(updatedRecord)
                 executionRecords.value = executionRepository.getAllRecords()
 
-                Toast.makeText(this@MainActivity, result.message, Toast.LENGTH_LONG).show()
-
                 // 重置执行状态
                 isExecuting.value = false
-
-                // 延迟3秒后清空日志，恢复默认状态
-                kotlinx.coroutines.delay(3000)
                 mobileAgent.value?.clearLogs()
+
+                // 设置执行报告
+                executionReport.value = ExecutionReport(
+                    instruction = instruction,
+                    success = result.success,
+                    message = result.message,
+                    stepCount = agentState?.currentStep ?: steps.size,
+                    durationMs = endTime - record.startTime,
+                    recordId = record.id
+                )
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // 用户取消任务 - 使用 NonCancellable 确保清理操作完成
                 kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
