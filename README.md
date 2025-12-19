@@ -207,6 +207,20 @@ Android 系统出于安全考虑，普通 App 无法：
 - **su 命令**：允许执行 `su -c` 命令（需谨慎使用）
 - **自动检测**：自动检测 Shizuku 权限等级（ADB/Root），非 Root 环境下该选项为灰色不可用
 
+### 📱 全屏手势导航支持
+
+适配现代 Android 设备的全屏手势导航：
+
+- **Home 手势**：从底部中间向上滑动
+- **返回手势**：从屏幕左侧或右侧边缘向内滑动
+- **自动适配**：可在设置中切换手势导航/传统导航键模式
+
+### 📋 执行记录增强
+
+- **日志复制**：一键复制全部日志，长按复制单条日志
+- **重复执行**：对已完成的任务一键重新执行
+- **性能指标**：显示首 Token 时间和总耗时
+
 ---
 
 ## 快速开始
@@ -366,6 +380,10 @@ app/src/main/java/com/roubao/autopilot/
 │   ├── Notetaker.kt          # 笔记 Agent
 │   └── InfoPool.kt           # 状态池
 │
+├── autoglm/                  # AutoGLM 单循环 Agent
+│   ├── AutoGLMAgent.kt       # 简化版 Agent（推荐）
+│   └── MessageBuilder.kt     # 系统提示词构建器
+│
 ├── tools/                    # Tools 层 - 原子能力
 │   ├── Tool.kt               # Tool 接口定义
 │   ├── ToolManager.kt        # 工具管理器
@@ -386,7 +404,8 @@ app/src/main/java/com/roubao/autopilot/
 │   └── AppScanner.kt         # 应用扫描 (拼音/语义搜索)
 │
 ├── vlm/                      # VLM 客户端
-│   └── VLMClient.kt          # API 调用封装
+│   ├── VLMClient.kt          # 视觉模型 API 封装
+│   └── PlanningClient.kt     # 规划模型 API 封装（实验性）
 │
 ├── ui/                       # 用户界面
 │   ├── screens/              # 各个页面
@@ -413,12 +432,16 @@ app/src/main/assets/
 - [x] **Skills 层** - 用户意图映射，支持 Delegation 和 GUI 自动化两种模式
 - [x] **智能应用搜索** - 拼音、语义、分类多维度匹配
 - [x] **快速路径** - 高置信度 Skill 直接 DeepLink 跳转
+- [x] **全屏手势导航** - 支持现代 Android 设备的手势操作
+- [x] **AutoGLM 模式** - 单循环 Agent 架构，执行效率更高
+- [x] **执行记录增强** - 日志复制、重复执行、性能指标展示
+- [x] **规划模型集成** - 可选的任务规划能力（实验性）
 
 ### 🚀 v2.0 开发中
 
 > 正在开发的重大更新，目前在 `roubao2.0+AccessibilityService` 分支
 
-- [ ] **无障碍服务混合模式** - 集成 AccessibilityService，实现更精准的 UI 操作
+- [x] **无障碍服务集成** - 集成 AccessibilityService，实现更精准的 UI 操作
   - 优先使用元素索引点击（不受屏幕变化影响）
   - 智能回退：索引模式失败时自动切换到坐标模式
   - 无需 Root，进一步降低使用门槛
