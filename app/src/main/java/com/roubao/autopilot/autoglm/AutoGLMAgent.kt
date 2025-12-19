@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import com.roubao.autopilot.controller.DeviceController
 import com.roubao.autopilot.controller.DeviceController.ExecutionMethod
 import com.roubao.autopilot.ui.OverlayService
+import com.roubao.autopilot.vlm.PlanningClient
 import com.roubao.autopilot.vlm.VLMClient
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -16,14 +17,25 @@ import kotlin.coroutines.coroutineContext
 
 /**
  * AutoGLM Agent - 基于 Open-AutoGLM 的单循环 Agent 实现
- * 移植自 phone_agent/agent.py
+ * 支持双模型架构：
+ * - visionClient (AutoGLM): 截图分析 + 动作提取
+ * - planningClient (Claude): 任务规划 + 决策验证 (可选)
  */
 class AutoGLMAgent(
-    private val vlmClient: VLMClient,
+    private val visionClient: VLMClient,           // 视觉模型 (AutoGLM)
     private val deviceController: DeviceController,
-    private val appPackages: AppPackages? = null,  // 应用包名映射
+    private val appPackages: AppPackages? = null,
+    private val planningClient: PlanningClient? = null,  // 规划模型 (Claude, 可选)
     private val config: AgentConfig = AgentConfig()
 ) {
+    // 兼容旧构造函数
+    constructor(
+        vlmClient: VLMClient,
+        deviceController: DeviceController,
+        appPackages: AppPackages?,
+        config: AgentConfig
+    ) : this(vlmClient, deviceController, appPackages, null, config)
+
     /**
      * 便捷构造函数 - 使用 Context 自动创建 AppPackages
      */
@@ -32,7 +44,18 @@ class AutoGLMAgent(
         deviceController: DeviceController,
         context: Context,
         config: AgentConfig = AgentConfig()
-    ) : this(vlmClient, deviceController, AppPackages.getInstance(context), config)
+    ) : this(vlmClient, deviceController, AppPackages.getInstance(context), null, config)
+
+    /**
+     * 完整构造函数 - 双模型 + Context
+     */
+    constructor(
+        visionClient: VLMClient,
+        deviceController: DeviceController,
+        context: Context,
+        planningClient: PlanningClient?,
+        config: AgentConfig = AgentConfig()
+    ) : this(visionClient, deviceController, AppPackages.getInstance(context), planningClient, config)
 
     /**
      * Agent 配置
@@ -43,7 +66,9 @@ class AutoGLMAgent(
         val firstStepDelayMs: Long = 3000,         // 首步延迟 (等待应用启动)
         val verbose: Boolean = true,               // 是否输出调试信息
         val systemPrompt: String? = null,          // 自定义系统提示词
-        val useStreaming: Boolean = true           // 是否使用流式输出
+        val useStreaming: Boolean = true,          // 是否使用流式输出
+        val usePlanning: Boolean = true,           // 是否使用规划模型 (需要 planningClient)
+        val verifyInterval: Int = 5                // 每隔多少步进行验证 (0=不验证)
     )
 
     /**
@@ -71,6 +96,9 @@ class AutoGLMAgent(
      * 步骤回调 (用于 UI 更新)
      */
     interface StepCallback {
+        /** 规划完成 (使用 planningClient 时调用) */
+        fun onPlanReady(steps: List<String>) {}
+
         /** 步骤开始 */
         fun onStepStart(stepNumber: Int)
 
@@ -94,11 +122,19 @@ class AutoGLMAgent(
 
         /** 性能指标 (流式输出时调用) */
         fun onPerformanceMetrics(timeToFirstTokenMs: Long?, totalTimeMs: Long) {}
+
+        /** 验证结果 (使用 planningClient 时调用) */
+        fun onVerification(progress: Int, isOnTrack: Boolean, suggestion: String?) {}
     }
 
     // 对话上下文
     private val context = mutableListOf<org.json.JSONObject>()
     private var stepCount = 0
+
+    // 规划相关
+    private var taskPlan: PlanningClient.PlanResult? = null
+    private val recentActions = mutableListOf<String>()  // 最近的操作记录
+    private var currentTask: String = ""
 
     /**
      * 运行 Agent 完成任务
@@ -113,8 +149,35 @@ class AutoGLMAgent(
         // 重置状态
         context.clear()
         stepCount = 0
+        taskPlan = null
+        recentActions.clear()
+        currentTask = task
 
         try {
+            // === 规划阶段 (如果有 planningClient) ===
+            if (planningClient != null && config.usePlanning) {
+                if (config.verbose) {
+                    println("[AutoGLMAgent] 使用 Claude 进行任务规划...")
+                }
+                val planResult = planningClient.planTask(task)
+                if (planResult.isSuccess) {
+                    taskPlan = planResult.getOrNull()
+                    if (config.verbose) {
+                        println("[AutoGLMAgent] 规划完成: ${taskPlan?.steps?.size} 步")
+                        taskPlan?.steps?.forEachIndexed { i, step ->
+                            println("  ${i + 1}. $step")
+                        }
+                    }
+                    callback?.onPlanReady(taskPlan?.steps ?: emptyList())
+                } else {
+                    if (config.verbose) {
+                        println("[AutoGLMAgent] 规划失败: ${planResult.exceptionOrNull()?.message}")
+                    }
+                    // 规划失败不影响执行，继续使用视觉模型
+                }
+            }
+
+            // === 执行阶段 ===
             // 首步执行
             var result = executeStep(task, isFirst = true, callback = callback)
 
@@ -128,6 +191,12 @@ class AutoGLMAgent(
 
             // 循环执行直到完成或达到最大步数
             while (stepCount < config.maxSteps && coroutineContext.isActive) {
+                // === 定期验证 (如果有 planningClient) ===
+                if (planningClient != null && config.verifyInterval > 0 &&
+                    stepCount > 0 && stepCount % config.verifyInterval == 0) {
+                    verifyProgress(callback)
+                }
+
                 result = executeStep(isFirst = false, callback = callback)
 
                 if (result.finished) {
@@ -158,6 +227,35 @@ class AutoGLMAgent(
                 message = "执行出错: ${e.message}",
                 stepCount = stepCount
             )
+        }
+    }
+
+    /**
+     * 验证当前进度 (使用 planningClient)
+     */
+    private suspend fun verifyProgress(callback: StepCallback?) {
+        val planner = planningClient ?: return
+        val plan = taskPlan ?: return
+
+        if (config.verbose) {
+            println("[AutoGLMAgent] 验证进度 (步骤 $stepCount)...")
+        }
+
+        val verifyResult = planner.verifyProgress(
+            task = currentTask,
+            currentStep = stepCount,
+            totalSteps = plan.estimatedSteps.coerceAtLeast(config.maxSteps),
+            recentActions = recentActions.takeLast(5),
+            currentScreenDescription = "执行中"  // TODO: 可以添加更详细的屏幕描述
+        )
+
+        if (verifyResult.isSuccess) {
+            val result = verifyResult.getOrNull()!!
+            if (config.verbose) {
+                println("[AutoGLMAgent] 验证结果: ${result.progress}% on_track=${result.isOnTrack}")
+                result.suggestion?.let { println("[AutoGLMAgent] 建议: $it") }
+            }
+            callback?.onVerification(result.progress, result.isOnTrack, result.suggestion)
         }
     }
 
@@ -207,16 +305,21 @@ class AutoGLMAgent(
             val systemPrompt = config.systemPrompt ?: MessageBuilder.getSystemPrompt()
             context.add(MessageBuilder.createSystemMessage(systemPrompt))
 
-            // 添加首次用户消息
-            context.add(MessageBuilder.buildFirstUserMessage(userPrompt!!, screenshot, currentApp))
+            // 添加首次用户消息 (包含规划步骤)
+            context.add(MessageBuilder.buildFirstUserMessage(
+                userPrompt!!,
+                screenshot,
+                currentApp,
+                taskPlan?.steps  // 传递规划步骤
+            ))
         } else {
             // 添加后续用户消息
             context.add(MessageBuilder.buildFollowUpUserMessage(screenshot, currentApp))
         }
 
-        // 4. 调用 VLM 获取响应
+        // 4. 调用视觉模型获取响应
         if (config.verbose) {
-            println("[AutoGLMAgent] 调用 VLM (streaming=${config.useStreaming})...")
+            println("[AutoGLMAgent] 调用视觉模型 (streaming=${config.useStreaming})...")
         }
 
         val messagesJson = JSONArray().apply {
@@ -230,7 +333,7 @@ class AutoGLMAgent(
 
         if (config.useStreaming) {
             // 流式调用
-            val streamResult = vlmClient.predictWithContextStream(
+            val streamResult = visionClient.predictWithContextStream(
                 messagesJson,
                 object : com.roubao.autopilot.vlm.VLMClient.StreamCallback {
                     override fun onFirstToken(timeToFirstTokenMs: Long) {
@@ -289,7 +392,7 @@ class AutoGLMAgent(
 
         } else {
             // 非流式调用 (原有逻辑)
-            val vlmResult = vlmClient.predictWithContext(messagesJson)
+            val vlmResult = visionClient.predictWithContext(messagesJson)
 
             if (vlmResult.isFailure) {
                 val error = vlmResult.exceptionOrNull()?.message ?: "未知错误"
@@ -345,7 +448,10 @@ class AutoGLMAgent(
 
             is ActionParser.ParsedAction.Do -> {
                 callback?.onAction(parsedAction)
-                executeAction(parsedAction, screenWidth, screenHeight, callback)
+                val result = executeAction(parsedAction, screenWidth, screenHeight, callback)
+                // 记录操作用于验证
+                recentActions.add("${parsedAction.action}: ${parsedAction.params}")
+                result
             }
 
             is ActionParser.ParsedAction.Error -> {
@@ -384,9 +490,22 @@ class AutoGLMAgent(
             when (action.action) {
                 ActionParser.Actions.LAUNCH -> {
                     val appName = action.params["app"] as? String ?: ""
-                    val packageName = appPackages?.smartMatch(appName) ?: appName
-                    if (config.verbose) println("[AutoGLMAgent] Launch: $appName -> $packageName")
-                    deviceController.openApp(packageName)
+                    val lowerAppName = appName.lowercase()
+
+                    // 检查是否是浏览器相关的请求 - 直接传给 DeviceController 处理
+                    val isBrowserRequest = lowerAppName.contains("浏览器") ||
+                            lowerAppName.contains("browser") ||
+                            lowerAppName == "chrome"
+
+                    if (isBrowserRequest) {
+                        if (config.verbose) println("[AutoGLMAgent] Launch Browser: $appName")
+                        // 直接传 "浏览器"，让 DeviceController 尝试多个浏览器包名
+                        deviceController.openApp("浏览器")
+                    } else {
+                        val packageName = appPackages?.smartMatch(appName) ?: appName
+                        if (config.verbose) println("[AutoGLMAgent] Launch: $appName -> $packageName")
+                        deviceController.openApp(packageName)
+                    }
                     delay(2000)
                     StepResult(true, false, action, "", null, "Shizuku")  // Launch 只能通过 Shizuku
                 }

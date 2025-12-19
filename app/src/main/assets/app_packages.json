@@ -101,6 +101,28 @@
     "Duolingo": "com.duolingo"
   },
 
+  "browser": {
+    "浏览器": "com.android.chrome",
+    "Browser": "com.android.chrome",
+    "默认浏览器": "com.android.chrome",
+    "谷歌浏览器": "com.android.chrome",
+    "Google Chrome": "com.android.chrome",
+    "Edge": "com.microsoft.emmx",
+    "微软Edge": "com.microsoft.emmx",
+    "三星浏览器": "com.sec.android.app.sbrowser",
+    "Samsung Browser": "com.sec.android.app.sbrowser",
+    "小米浏览器": "com.android.browser",
+    "华为浏览器": "com.huawei.browser",
+    "Huawei Browser": "com.huawei.browser",
+    "QQ浏览器": "com.tencent.mtt",
+    "UC浏览器": "com.UCMobile",
+    "Firefox": "org.mozilla.firefox",
+    "火狐浏览器": "org.mozilla.firefox",
+    "Opera": "com.opera.browser",
+    "Via浏览器": "mark.via",
+    "夸克浏览器": "com.quark.browser"
+  },
+
   "health": {
     "Keep": "com.gotokeep.keep",
     "美柚": "com.lingan.seeyou",

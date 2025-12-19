@@ -37,6 +37,7 @@ import com.roubao.autopilot.ui.screens.*
 import com.roubao.autopilot.ui.theme.*
 import androidx.compose.ui.graphics.toArgb
 import androidx.core.view.WindowCompat
+import com.roubao.autopilot.vlm.PlanningClient
 import com.roubao.autopilot.vlm.VLMClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -114,6 +115,9 @@ class MainActivity : ComponentActivity() {
         deviceController.setCacheDir(cacheDir)
         settingsManager = SettingsManager(this)
         executionRepository = ExecutionRepository(this)
+
+        // 应用手势导航设置
+        deviceController.useGestureNavigation = settingsManager.settings.value.useGestureNavigation
 
         // 加载执行记录
         lifecycleScope.launch {
@@ -251,7 +255,13 @@ class MainActivity : ComponentActivity() {
                 if (selectedRecord != null) {
                     HistoryDetailScreen(
                         record = selectedRecord!!,
-                        onBack = { selectedRecord = null }
+                        onBack = { selectedRecord = null },
+                        onRerun = { instruction ->
+                            // 关闭详情页，切换到首页，执行任务
+                            selectedRecord = null
+                            currentScreen = Screen.Home
+                            runAgent(instruction, settings.apiKey, settings.baseUrl, settings.model, settings.maxSteps)
+                        }
                     )
                 } else {
                     // 主页面切换
@@ -305,6 +315,10 @@ class MainActivity : ComponentActivity() {
                                 onUpdateRootModeEnabled = { settingsManager.updateRootModeEnabled(it) },
                                 onUpdateSuCommandEnabled = { settingsManager.updateSuCommandEnabled(it) },
                                 onUpdateUseAutoGLMMode = { settingsManager.updateUseAutoGLMMode(it) },
+                                onUpdateUseGestureNavigation = {
+                                    settingsManager.updateUseGestureNavigation(it)
+                                    deviceController.useGestureNavigation = it
+                                },
                                 onSelectProvider = { settingsManager.selectProvider(it) },
                                 shizukuAvailable = isShizukuAvailable,
                                 shizukuPrivilegeLevel = if (isShizukuAvailable) {
@@ -323,7 +337,12 @@ class MainActivity : ComponentActivity() {
                                             onError(error.message ?: "未知错误")
                                         }
                                     }
-                                }
+                                },
+                                // 规划模型配置回调
+                                onUpdatePlanningEnabled = { settingsManager.updatePlanningEnabled(it) },
+                                onUpdatePlanningBaseUrl = { settingsManager.updatePlanningBaseUrl(it) },
+                                onUpdatePlanningApiKey = { settingsManager.updatePlanningApiKey(it) },
+                                onUpdatePlanningModel = { settingsManager.updatePlanningModel(it) }
                             )
                         }
                     }
@@ -509,13 +528,33 @@ class MainActivity : ComponentActivity() {
             currentExecutionJob = null
         }
 
+        // 创建规划模型客户端 (如果启用)
+        val planningConfig = settingsManager.settings.value.planningConfig
+        val planningClient = if (planningConfig.enabled &&
+            planningConfig.baseUrl.isNotBlank() &&
+            planningConfig.apiKey.isNotBlank()) {
+            PlanningClient(
+                apiKey = planningConfig.apiKey,
+                baseUrl = planningConfig.baseUrl,
+                model = planningConfig.model
+            )
+        } else {
+            null
+        }
+
+        if (planningClient != null) {
+            agentLogs.add("📋 规划模型已启用: ${planningConfig.model}")
+        }
+
         val agent = AutoGLMAgent(
-            vlmClient = vlmClient,
+            visionClient = vlmClient,
             deviceController = deviceController,
             context = this,
+            planningClient = planningClient,
             config = AutoGLMAgent.AgentConfig(
                 maxSteps = maxSteps,
-                useStreaming = true
+                useStreaming = true,
+                usePlanning = planningClient != null
             )
         )
 
@@ -574,6 +613,21 @@ class MainActivity : ComponentActivity() {
 
             override fun onPerformanceMetrics(timeToFirstTokenMs: Long?, totalTimeMs: Long) {
                 OverlayService.showMetrics(timeToFirstTokenMs, totalTimeMs)
+            }
+
+            override fun onPlanReady(steps: List<String>) {
+                agentLogs.add("📋 任务规划完成 (${steps.size} 步)")
+                steps.forEachIndexed { i, step ->
+                    agentLogs.add("  ${i + 1}. $step")
+                }
+                Log.d(TAG, "规划完成: $steps")
+            }
+
+            override fun onVerification(progress: Int, isOnTrack: Boolean, suggestion: String?) {
+                val status = if (isOnTrack) "✓ 正常" else "⚠ 偏离"
+                agentLogs.add("🔍 验证: $progress% $status")
+                suggestion?.let { agentLogs.add("  建议: $it") }
+                Log.d(TAG, "验证: $progress% on_track=$isOnTrack suggestion=$suggestion")
             }
         }
 

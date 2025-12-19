@@ -60,9 +60,25 @@ data class ProviderConfig(
 /**
  * 默认配置 (API Key 需要用户在设置中配置)
  */
+// 视觉模型默认配置 (智谱 AutoGLM)
 const val DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 const val DEFAULT_MODEL = "autoglm-phone"
 const val DEFAULT_API_KEY = ""  // 需要用户在设置中配置
+
+// 规划模型默认配置 (Claude)
+const val DEFAULT_PLANNING_BASE_URL = ""  // 需要用户在设置中配置
+const val DEFAULT_PLANNING_API_KEY = ""  // 需要用户在设置中配置
+const val DEFAULT_PLANNING_MODEL = "claude-3-5-sonnet-20241022"
+
+/**
+ * 规划模型配置 (Claude)
+ */
+data class PlanningConfig(
+    val enabled: Boolean = true,  // 默认启用
+    val baseUrl: String = DEFAULT_PLANNING_BASE_URL,
+    val apiKey: String = DEFAULT_PLANNING_API_KEY,
+    val model: String = DEFAULT_PLANNING_MODEL
+)
 
 /**
  * 应用设置
@@ -76,7 +92,9 @@ data class AppSettings(
     val cloudCrashReportEnabled: Boolean = true,
     val rootModeEnabled: Boolean = false,
     val suCommandEnabled: Boolean = false,
-    val useAutoGLMMode: Boolean = true  // 是否使用 AutoGLM 模式 (默认开启)
+    val useAutoGLMMode: Boolean = true,  // 是否使用 AutoGLM 模式 (默认开启)
+    val useGestureNavigation: Boolean = true,  // 是否使用全屏手势导航 (默认开启)
+    val planningConfig: PlanningConfig = PlanningConfig()  // 规划模型配置
 ) {
     // 便捷属性：获取当前服务商的配置
     val currentConfig: ProviderConfig
@@ -204,6 +222,14 @@ class SettingsManager(context: Context) {
             android.util.Log.d("SettingsManager", "Migrated old settings to provider: $oldProviderId")
         }
 
+        // 加载规划模型配置 (使用默认值)
+        val planningConfig = PlanningConfig(
+            enabled = prefs.getBoolean("planning_enabled", true),  // 默认启用
+            baseUrl = prefs.getString("planning_base_url", DEFAULT_PLANNING_BASE_URL) ?: DEFAULT_PLANNING_BASE_URL,
+            apiKey = securePrefs.getString("planning_api_key", DEFAULT_PLANNING_API_KEY) ?: DEFAULT_PLANNING_API_KEY,
+            model = prefs.getString("planning_model", DEFAULT_PLANNING_MODEL) ?: DEFAULT_PLANNING_MODEL
+        )
+
         return AppSettings(
             currentProviderId = currentProviderId,
             providerConfigs = providerConfigs,
@@ -213,7 +239,9 @@ class SettingsManager(context: Context) {
             cloudCrashReportEnabled = prefs.getBoolean("cloud_crash_report_enabled", true),
             rootModeEnabled = prefs.getBoolean("root_mode_enabled", false),
             suCommandEnabled = prefs.getBoolean("su_command_enabled", false),
-            useAutoGLMMode = prefs.getBoolean("use_autoglm_mode", true)
+            useAutoGLMMode = prefs.getBoolean("use_autoglm_mode", true),
+            useGestureNavigation = prefs.getBoolean("use_gesture_navigation", true),
+            planningConfig = planningConfig
         )
     }
 
@@ -362,5 +390,53 @@ class SettingsManager(context: Context) {
     fun updateUseAutoGLMMode(enabled: Boolean) {
         prefs.edit().putBoolean("use_autoglm_mode", enabled).apply()
         _settings.value = _settings.value.copy(useAutoGLMMode = enabled)
+    }
+
+    fun updateUseGestureNavigation(enabled: Boolean) {
+        prefs.edit().putBoolean("use_gesture_navigation", enabled).apply()
+        _settings.value = _settings.value.copy(useGestureNavigation = enabled)
+    }
+
+    // ========== 规划模型配置 ==========
+
+    fun updatePlanningEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("planning_enabled", enabled).apply()
+        _settings.value = _settings.value.copy(
+            planningConfig = _settings.value.planningConfig.copy(enabled = enabled)
+        )
+    }
+
+    fun updatePlanningBaseUrl(baseUrl: String) {
+        prefs.edit().putString("planning_base_url", baseUrl).apply()
+        _settings.value = _settings.value.copy(
+            planningConfig = _settings.value.planningConfig.copy(baseUrl = baseUrl)
+        )
+    }
+
+    fun updatePlanningApiKey(apiKey: String) {
+        securePrefs.edit().putString("planning_api_key", apiKey).apply()
+        _settings.value = _settings.value.copy(
+            planningConfig = _settings.value.planningConfig.copy(apiKey = apiKey)
+        )
+    }
+
+    fun updatePlanningModel(model: String) {
+        prefs.edit().putString("planning_model", model).apply()
+        _settings.value = _settings.value.copy(
+            planningConfig = _settings.value.planningConfig.copy(model = model)
+        )
+    }
+
+    /**
+     * 一次性更新完整的规划配置
+     */
+    fun updatePlanningConfig(config: PlanningConfig) {
+        prefs.edit()
+            .putBoolean("planning_enabled", config.enabled)
+            .putString("planning_base_url", config.baseUrl)
+            .putString("planning_model", config.model)
+            .apply()
+        securePrefs.edit().putString("planning_api_key", config.apiKey).apply()
+        _settings.value = _settings.value.copy(planningConfig = config)
     }
 }

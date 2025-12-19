@@ -119,10 +119,29 @@ object MessageBuilder {
      * @param task 用户任务
      * @param screenshot 截图
      * @param currentApp 当前应用
+     * @param planSteps 规划步骤 (可选，来自规划模型)
      */
-    fun buildFirstUserMessage(task: String, screenshot: Bitmap, currentApp: String): JSONObject {
+    fun buildFirstUserMessage(
+        task: String,
+        screenshot: Bitmap,
+        currentApp: String,
+        planSteps: List<String>? = null
+    ): JSONObject {
         val screenInfo = buildScreenInfo(currentApp)
-        val text = "$task\n\n** Screen Info **\n$screenInfo"
+
+        // 如果有规划步骤，添加到提示中
+        val planSection = if (!planSteps.isNullOrEmpty()) {
+            val stepsText = planSteps.mapIndexed { i, step -> "${i + 1}. $step" }.joinToString("\n")
+            """
+
+** 任务规划 (请严格按照以下步骤执行) **
+$stepsText
+
+注意: 上述步骤由规划模型生成，请严格按照步骤顺序执行，不要偏离计划。
+"""
+        } else ""
+
+        val text = "$task$planSection\n** Screen Info **\n$screenInfo"
         val imageBase64 = bitmapToBase64(screenshot)
 
         return createUserMessageWithImage(text, imageBase64)
@@ -207,6 +226,12 @@ object MessageBuilder {
     等待页面加载，x为需要等待多少秒。
 - finish(message="xxx")
     finish是结束任务的操作，表示准确完整完成任务，message是终止信息。
+
+重要说明：
+- 上述所有操作指令（Launch, Tap, Type, Swipe, Back, Home 等）都是你可以直接执行的**内置功能**。
+- 你**不需要**在任何App的界面中查找或浏览这些工具，它们会自动执行。
+- 如果当前屏幕显示的是"肉包"、"Roubao"或"Baozi"应用界面（这是控制你的自动化工具），请立即执行 Home 回到桌面，然后 Launch 目标应用。
+- **永远不要**操作肉包App的界面（如点击"能力"、"记录"、"设置"等按钮），直接使用内置指令完成任务。
 
 必须遵循的规则：
 1. 在执行任何操作前，先检查当前app是否是目标app，如果不是，先执行 Launch。

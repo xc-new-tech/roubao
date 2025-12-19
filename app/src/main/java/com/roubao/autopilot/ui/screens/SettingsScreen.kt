@@ -28,6 +28,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -44,6 +45,7 @@ import com.roubao.autopilot.BuildConfig
 import com.roubao.autopilot.accessibility.AutoPilotAccessibilityService
 import com.roubao.autopilot.data.ApiProvider
 import com.roubao.autopilot.data.AppSettings
+import com.roubao.autopilot.data.PlanningConfig
 import com.roubao.autopilot.ui.theme.BaoziTheme
 import com.roubao.autopilot.ui.theme.ThemeMode
 import com.roubao.autopilot.utils.CrashHandler
@@ -61,10 +63,16 @@ fun SettingsScreen(
     onUpdateRootModeEnabled: (Boolean) -> Unit,
     onUpdateSuCommandEnabled: (Boolean) -> Unit,
     onUpdateUseAutoGLMMode: (Boolean) -> Unit,
+    onUpdateUseGestureNavigation: (Boolean) -> Unit,
     onSelectProvider: (ApiProvider) -> Unit,
     shizukuAvailable: Boolean,
     shizukuPrivilegeLevel: String = "ADB", // "ADB", "ROOT", "NONE"
-    onFetchModels: ((onSuccess: (List<String>) -> Unit, onError: (String) -> Unit) -> Unit)? = null
+    onFetchModels: ((onSuccess: (List<String>) -> Unit, onError: (String) -> Unit) -> Unit)? = null,
+    // 规划模型配置回调
+    onUpdatePlanningEnabled: (Boolean) -> Unit = {},
+    onUpdatePlanningBaseUrl: (String) -> Unit = {},
+    onUpdatePlanningApiKey: (String) -> Unit = {},
+    onUpdatePlanningModel: (String) -> Unit = {}
 ) {
     val colors = BaoziTheme.colors
     var showApiKeyDialog by remember { mutableStateOf(false) }
@@ -76,6 +84,7 @@ fun SettingsScreen(
     var showOverlayHelpDialog by remember { mutableStateOf(false) }
     var showRootModeWarningDialog by remember { mutableStateOf(false) }
     var showSuCommandWarningDialog by remember { mutableStateOf(false) }
+    var showPlanningConfigDialog by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier
@@ -191,6 +200,67 @@ fun SettingsScreen(
                     Switch(
                         checked = settings.useAutoGLMMode,
                         onCheckedChange = { onUpdateUseAutoGLMMode(it) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = colors.primary,
+                            checkedTrackColor = colors.primary.copy(alpha = 0.5f),
+                            uncheckedThumbColor = colors.textHint,
+                            uncheckedTrackColor = colors.backgroundInput
+                        )
+                    )
+                }
+            }
+        }
+
+        // 全屏手势导航开关
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = colors.backgroundCard)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(
+                                Brush.linearGradient(
+                                    colors = listOf(colors.primary.copy(alpha = 0.2f), colors.secondary.copy(alpha = 0.2f))
+                                )
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "👆",
+                            fontSize = 20.sp,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "全屏手势导航",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = colors.textPrimary
+                        )
+                        Text(
+                            text = if (settings.useGestureNavigation) "使用滑动手势模拟导航键" else "使用传统导航键事件",
+                            fontSize = 13.sp,
+                            color = colors.textSecondary,
+                            maxLines = 1
+                        )
+                    }
+                    Switch(
+                        checked = settings.useGestureNavigation,
+                        onCheckedChange = { onUpdateUseGestureNavigation(it) },
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = colors.primary,
                             checkedTrackColor = colors.primary.copy(alpha = 0.5f),
@@ -521,6 +591,82 @@ fun SettingsScreen(
             )
         }
 
+        // 规划模型分组
+        item {
+            SettingsSection(title = "规划模型 (Claude)")
+        }
+
+        // 规划模型开关
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = colors.backgroundCard)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(colors.primary.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Star,
+                            contentDescription = null,
+                            tint = colors.primary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "启用规划模型",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = colors.textPrimary
+                        )
+                        Text(
+                            text = if (settings.planningConfig.enabled) "使用 Claude 进行任务规划" else "仅使用视觉模型",
+                            fontSize = 13.sp,
+                            color = colors.textSecondary,
+                            maxLines = 1
+                        )
+                    }
+                    Switch(
+                        checked = settings.planningConfig.enabled,
+                        onCheckedChange = { onUpdatePlanningEnabled(it) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = colors.primary,
+                            checkedTrackColor = colors.primary.copy(alpha = 0.5f),
+                            uncheckedThumbColor = colors.textHint,
+                            uncheckedTrackColor = colors.backgroundInput
+                        )
+                    )
+                }
+            }
+        }
+
+        // 规划模型配置 (仅当启用时显示)
+        if (settings.planningConfig.enabled) {
+            item {
+                SettingsItem(
+                    icon = Icons.Default.Settings,
+                    title = "规划模型配置",
+                    subtitle = if (settings.planningConfig.baseUrl.isNotBlank())
+                        "${settings.planningConfig.model}" else "未配置",
+                    onClick = { showPlanningConfigDialog = true }
+                )
+            }
+        }
+
         // 反馈分组
         item {
             SettingsSection(title = "反馈与调试")
@@ -782,6 +928,17 @@ fun SettingsScreen(
                 onUpdateSuCommandEnabled(true)
                 showSuCommandWarningDialog = false
             }
+        )
+    }
+
+    // 规划模型配置对话框
+    if (showPlanningConfigDialog) {
+        PlanningConfigDialog(
+            config = settings.planningConfig,
+            onDismiss = { showPlanningConfigDialog = false },
+            onUpdateBaseUrl = onUpdatePlanningBaseUrl,
+            onUpdateApiKey = onUpdatePlanningApiKey,
+            onUpdateModel = onUpdatePlanningModel
         )
     }
 }
@@ -1993,6 +2150,188 @@ fun SuCommandWarningDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text("取消", color = colors.textSecondary)
+            }
+        }
+    )
+}
+
+/**
+ * 规划模型配置对话框
+ */
+@Composable
+fun PlanningConfigDialog(
+    config: PlanningConfig,
+    onDismiss: () -> Unit,
+    onUpdateBaseUrl: (String) -> Unit,
+    onUpdateApiKey: (String) -> Unit,
+    onUpdateModel: (String) -> Unit
+) {
+    val colors = BaoziTheme.colors
+    var baseUrl by remember { mutableStateOf(config.baseUrl) }
+    var apiKey by remember { mutableStateOf(config.apiKey) }
+    var model by remember { mutableStateOf(config.model) }
+    var showApiKey by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = colors.backgroundCard,
+        title = {
+            Text("规划模型配置", color = colors.textPrimary)
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                    text = "配置用于任务规划的 Claude 模型",
+                    fontSize = 13.sp,
+                    color = colors.textSecondary
+                )
+
+                // Base URL
+                Column {
+                    Text(
+                        text = "API 地址",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = colors.textPrimary
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(colors.backgroundInput)
+                            .padding(horizontal = 12.dp, vertical = 10.dp)
+                    ) {
+                        if (baseUrl.isEmpty()) {
+                            Text(
+                                text = "http://your-api-server/api",
+                                color = colors.textHint,
+                                fontSize = 14.sp
+                            )
+                        }
+                        BasicTextField(
+                            value = baseUrl,
+                            onValueChange = {
+                                baseUrl = it
+                                onUpdateBaseUrl(it)
+                            },
+                            textStyle = TextStyle(
+                                color = colors.textPrimary,
+                                fontSize = 14.sp
+                            ),
+                            cursorBrush = SolidColor(colors.primary),
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                    }
+                }
+
+                // API Key
+                Column {
+                    Text(
+                        text = "API Key",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = colors.textPrimary
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(colors.backgroundInput)
+                            .padding(horizontal = 12.dp, vertical = 10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(modifier = Modifier.weight(1f)) {
+                                if (apiKey.isEmpty()) {
+                                    Text(
+                                        text = "输入 API Key",
+                                        color = colors.textHint,
+                                        fontSize = 14.sp
+                                    )
+                                }
+                                BasicTextField(
+                                    value = apiKey,
+                                    onValueChange = {
+                                        apiKey = it
+                                        onUpdateApiKey(it)
+                                    },
+                                    textStyle = TextStyle(
+                                        color = colors.textPrimary,
+                                        fontSize = 14.sp
+                                    ),
+                                    cursorBrush = SolidColor(colors.primary),
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true,
+                                    visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation()
+                                )
+                            }
+                            IconButton(
+                                onClick = { showApiKey = !showApiKey },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (showApiKey) Icons.Default.Close else Icons.Default.Search,
+                                    contentDescription = if (showApiKey) "隐藏" else "显示",
+                                    tint = colors.textHint,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Model
+                Column {
+                    Text(
+                        text = "模型",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = colors.textPrimary
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(colors.backgroundInput)
+                            .padding(horizontal = 12.dp, vertical = 10.dp)
+                    ) {
+                        if (model.isEmpty()) {
+                            Text(
+                                text = "claude-3-5-sonnet-20241022",
+                                color = colors.textHint,
+                                fontSize = 14.sp
+                            )
+                        }
+                        BasicTextField(
+                            value = model,
+                            onValueChange = {
+                                model = it
+                                onUpdateModel(it)
+                            },
+                            textStyle = TextStyle(
+                                color = colors.textPrimary,
+                                fontSize = 14.sp
+                            ),
+                            cursorBrush = SolidColor(colors.primary),
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("完成", color = colors.primary)
             }
         }
     )

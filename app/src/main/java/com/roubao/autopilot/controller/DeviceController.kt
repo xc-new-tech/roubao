@@ -261,36 +261,51 @@ class DeviceController(private val context: Context? = null) {
     }
 
     /**
-     * 输入文本 - 优先使用 A11y 直接设置
+     * 输入文本 - 优先使用 Shizuku (更可靠)，A11y 作为备选
      * 会先清除现有文本再输入新文本
      */
     fun type(text: String) {
-        // 优先使用 A11y 直接设置文本 (最快，自动清除)
+        // 纯 ASCII 字符直接使用 input text (最可靠)
+        val hasNonAscii = text.any { it.code > 127 }
+
+        if (!hasNonAscii) {
+            // 英文/数字：直接使用 input text
+            lastExecutionMethod = ExecutionMethod.SHIZUKU
+            val escaped = text.replace("'", "'\\''").replace("\"", "\\\"")
+            exec("input text '$escaped'")
+            println("[DeviceController] type('$text') via input text")
+            return
+        }
+
+        // 中文/特殊字符：优先尝试 A11y，因为更快且不需要剪贴板
         val service = a11yService
         if (service != null) {
-            val success = service.inputTextToFocused(text)
+            // 方法1: 尝试向焦点输入框输入
+            var success = service.inputTextToFocused(text)
             if (success) {
                 lastExecutionMethod = ExecutionMethod.A11Y
-                println("[DeviceController] type('$text') via A11y")
+                println("[DeviceController] type('$text') via A11y (focused)")
                 return
             }
+
+            // 方法2: 如果找不到焦点，尝试找任何可编辑的输入框
+            val editableNode = service.findEditableNode()
+            if (editableNode != null) {
+                success = service.inputText(editableNode, text)
+                editableNode.recycle()
+                if (success) {
+                    lastExecutionMethod = ExecutionMethod.A11Y
+                    println("[DeviceController] type('$text') via A11y (editable)")
+                    return
+                }
+            }
+            println("[DeviceController] A11y 输入失败，降级使用剪贴板")
         }
 
-        // 降级使用 Shizuku - 需要先清除现有文本
+        // 降级使用剪贴板方式输入中文
         lastExecutionMethod = ExecutionMethod.SHIZUKU
-        // 先全选后删除，清除现有文本
-        exec("input keyevent 67")  // 删除键，尝试清除一些
-        exec("input keyevent KEYCODE_MOVE_HOME")  // 移到开头
-        exec("input keyevent --longpress 67")  // 长按删除
-
-        val hasNonAscii = text.any { it.code > 127 }
-        if (hasNonAscii) {
-            typeViaClipboard(text)
-        } else {
-            val escaped = text.replace("'", "'\\''")
-            exec("input text '$escaped'")
-        }
-        println("[DeviceController] type('$text') via Shizuku")
+        typeViaClipboard(text)
+        println("[DeviceController] type('$text') via clipboard")
     }
 
     /**
@@ -381,8 +396,11 @@ class DeviceController(private val context: Context? = null) {
         }
     }
 
+    /** 是否使用手势导航 (全屏手势模式) */
+    var useGestureNavigation: Boolean = true
+
     /**
-     * 返回键 - 优先使用 A11y
+     * 返回键 - 优先使用 A11y，备选使用手势或 keyevent
      */
     fun back() {
         val service = a11yService
@@ -394,12 +412,19 @@ class DeviceController(private val context: Context? = null) {
                 return
             }
         }
+
         lastExecutionMethod = ExecutionMethod.SHIZUKU
-        exec("input keyevent 4")
+        if (useGestureNavigation) {
+            // 全屏手势：从左侧边缘往右滑动
+            backGesture()
+        } else {
+            exec("input keyevent 4")
+            println("[DeviceController] back() via keyevent")
+        }
     }
 
     /**
-     * Home 键 - 优先使用 A11y
+     * Home 键 - 优先使用 A11y，备选使用手势或 keyevent
      */
     fun home() {
         val service = a11yService
@@ -411,8 +436,78 @@ class DeviceController(private val context: Context? = null) {
                 return
             }
         }
+
         lastExecutionMethod = ExecutionMethod.SHIZUKU
-        exec("input keyevent 3")
+        if (useGestureNavigation) {
+            // 全屏手势：从底部中间往上滑动
+            homeGesture()
+        } else {
+            exec("input keyevent 3")
+            println("[DeviceController] home() via keyevent")
+        }
+    }
+
+    /**
+     * 最近任务/多任务 - 使用手势
+     */
+    fun recents() {
+        val service = a11yService
+        if (service != null) {
+            val success = service.performRecents()
+            if (success) {
+                lastExecutionMethod = ExecutionMethod.A11Y
+                println("[DeviceController] recents() via A11y")
+                return
+            }
+        }
+
+        lastExecutionMethod = ExecutionMethod.SHIZUKU
+        if (useGestureNavigation) {
+            // 全屏手势：从底部中间往上滑动并停顿
+            recentsGesture()
+        } else {
+            exec("input keyevent 187")  // KEYCODE_APP_SWITCH
+            println("[DeviceController] recents() via keyevent")
+        }
+    }
+
+    /**
+     * Home 手势 - 从底部中间往上快速滑动
+     */
+    private fun homeGesture() {
+        val (width, height) = getScreenSize()
+        val startX = width / 2
+        val startY = height - 50  // 底部白条位置
+        val endX = width / 2
+        val endY = height / 2     // 滑到屏幕中间
+        exec("input swipe $startX $startY $endX $endY 150")  // 150ms 快速滑动
+        println("[DeviceController] home() via gesture ($startX,$startY -> $endX,$endY)")
+    }
+
+    /**
+     * Back 手势 - 从左侧边缘往右滑动
+     */
+    private fun backGesture() {
+        val (_, height) = getScreenSize()
+        val startX = 10           // 左侧边缘
+        val startY = height / 2   // 屏幕中间高度
+        val endX = 300            // 往右滑动
+        val endY = height / 2
+        exec("input swipe $startX $startY $endX $endY 150")  // 150ms
+        println("[DeviceController] back() via gesture ($startX,$startY -> $endX,$endY)")
+    }
+
+    /**
+     * 最近任务手势 - 从底部往上滑动并停顿
+     */
+    private fun recentsGesture() {
+        val (width, height) = getScreenSize()
+        val startX = width / 2
+        val startY = height - 50
+        val endX = width / 2
+        val endY = height / 3     // 滑到屏幕上方 1/3 处
+        exec("input swipe $startX $startY $endX $endY 500")  // 500ms 慢速滑动
+        println("[DeviceController] recents() via gesture ($startX,$startY -> $endX,$endY)")
     }
 
     /**
@@ -574,6 +669,7 @@ class DeviceController(private val context: Context? = null) {
 
     /**
      * 打开 App - 支持包名或应用名
+     * 优先使用 am start，失败时降级使用 monkey
      */
     fun openApp(packageName: String) {
         // 常见应用名到包名的映射 (作为备选)
@@ -581,7 +677,6 @@ class DeviceController(private val context: Context? = null) {
             "settings" to "com.android.settings",
             "设置" to "com.android.settings",
             "chrome" to "com.android.chrome",
-            "浏览器" to "com.android.browser",
             "camera" to "com.android.camera",
             "相机" to "com.android.camera",
             "phone" to "com.android.dialer",
@@ -599,10 +694,37 @@ class DeviceController(private val context: Context? = null) {
             "calendar" to "com.android.calendar",
             "日历" to "com.android.calendar",
             "files" to "com.android.documentsui",
-            "文件" to "com.android.documentsui"
+            "文件" to "com.android.documentsui",
+            "微信" to "com.tencent.mm",
+            "wechat" to "com.tencent.mm"
+        )
+
+        // 浏览器备选列表 (按优先级排序)
+        val browserPackages = listOf(
+            "com.android.chrome",           // Chrome
+            "com.microsoft.emmx",           // Edge
+            "com.sec.android.app.sbrowser", // Samsung Browser
+            "com.huawei.browser",           // 华为浏览器
+            "com.android.browser",          // AOSP 浏览器
+            "org.mozilla.firefox",          // Firefox
+            "com.tencent.mtt",              // QQ 浏览器
+            "com.UCMobile"                  // UC 浏览器
         )
 
         val lowerName = packageName.lowercase().trim()
+
+        // 如果是浏览器相关的请求，尝试多个浏览器包名
+        if (lowerName == "浏览器" || lowerName == "browser" || lowerName == "默认浏览器") {
+            for (browserPkg in browserPackages) {
+                if (launchAppByPackage(browserPkg)) {
+                    println("[DeviceController] ✅ 浏览器启动成功: $browserPkg")
+                    return
+                }
+            }
+            println("[DeviceController] ❌ 所有浏览器包名都启动失败")
+            return
+        }
+
         val finalPackage = if (packageName.contains(".")) {
             // 已经是包名格式
             packageName
@@ -611,9 +733,48 @@ class DeviceController(private val context: Context? = null) {
             packageMap[lowerName] ?: packageName
         }
 
-        // 使用 monkey 命令启动应用 (最可靠)
-        val result = exec("monkey -p $finalPackage -c android.intent.category.LAUNCHER 1 2>/dev/null")
-        println("[DeviceController] openApp: $packageName -> $finalPackage, result: $result")
+        // 启动应用
+        if (launchAppByPackage(finalPackage)) {
+            println("[DeviceController] ✅ openApp 成功: $packageName -> $finalPackage")
+        } else {
+            println("[DeviceController] ❌ openApp 失败: $packageName -> $finalPackage")
+        }
+    }
+
+    /**
+     * 通过包名启动应用
+     * 优先使用 am start，失败时降级使用 monkey
+     * @return 是否启动成功
+     */
+    private fun launchAppByPackage(packageName: String): Boolean {
+        // 方法1: 使用 am start 启动 launcher activity (最可靠)
+        // 先获取应用的 launcher activity
+        val dumpsysResult = exec("dumpsys package $packageName | grep -A 1 'android.intent.action.MAIN' | grep -o '$packageName/[^\"]*' | head -1")
+        val launcherActivity = dumpsysResult.trim()
+
+        if (launcherActivity.isNotEmpty() && launcherActivity.contains("/")) {
+            val amResult = exec("am start -n $launcherActivity")
+            println("[DeviceController] am start -n $launcherActivity, result: $amResult")
+            if (!amResult.contains("Error") && !amResult.contains("Exception")) {
+                return true
+            }
+        }
+
+        // 方法2: 使用 am start 配合 category.LAUNCHER
+        val amLauncherResult = exec("am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p $packageName")
+        println("[DeviceController] am start launcher: $packageName, result: $amLauncherResult")
+        if (!amLauncherResult.contains("Error") && !amLauncherResult.contains("Exception") && amLauncherResult.contains("Starting")) {
+            return true
+        }
+
+        // 方法3: 使用 monkey 命令作为备选
+        val monkeyResult = exec("monkey -p $packageName -c android.intent.category.LAUNCHER 1 2>/dev/null")
+        println("[DeviceController] monkey: $packageName, result: $monkeyResult")
+        if (monkeyResult.contains("Events injected: 1")) {
+            return true
+        }
+
+        return false
     }
 
     /**

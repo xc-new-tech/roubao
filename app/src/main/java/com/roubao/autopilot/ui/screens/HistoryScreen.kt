@@ -1,8 +1,14 @@
 package com.roubao.autopilot.ui.screens
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.animation.*
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -21,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -290,7 +297,8 @@ fun HistoryRecordCard(
 @Composable
 fun HistoryDetailScreen(
     record: ExecutionRecord,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onRerun: (String) -> Unit = {}  // 重复执行回调，参数为任务指令
 ) {
     val colors = BaoziTheme.colors
     // Tab 状态：0 = 时间线，1 = 日志
@@ -384,6 +392,29 @@ fun HistoryDetailScreen(
                         Text(record.formattedDuration, fontSize = 14.sp, color = colors.textPrimary)
                     }
                 }
+
+                // 重复执行按钮
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(
+                    onClick = { onRerun(record.instruction) },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colors.primary
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "重复执行",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
             }
         }
 
@@ -469,6 +500,7 @@ fun HistoryDetailScreen(
             }
             1 -> {
                 // 日志列表
+                val context = LocalContext.current
                 if (record.logs.isEmpty()) {
                     Box(
                         modifier = Modifier
@@ -483,25 +515,35 @@ fun HistoryDetailScreen(
                         )
                     }
                 } else {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-                    ) {
-                        items(record.logs) { log ->
-                            val logColor = when {
-                                log.contains("❌") -> colors.error
-                                log.contains("✅") -> colors.success
-                                log.contains("📋") || log.contains("🎬") -> colors.secondary
-                                log.contains("Step") || log.contains("=====") -> colors.primary
-                                log.contains("⛔") -> colors.error
-                                else -> colors.textSecondary
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        // 复制全部按钮
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(
+                                onClick = {
+                                    val allLogs = record.logs.joinToString("\n")
+                                    copyToClipboard(context, allLogs, "已复制全部日志")
+                                }
+                            ) {
+                                Text(
+                                    text = "📋 复制全部",
+                                    fontSize = 13.sp,
+                                    color = colors.primary
+                                )
                             }
-                            Text(
-                                text = log,
-                                fontSize = 12.sp,
-                                color = logColor,
-                                modifier = Modifier.padding(vertical = 2.dp)
-                            )
+                        }
+
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)
+                        ) {
+                            items(record.logs) { log ->
+                                LogItem(log = log, context = context)
+                            }
                         }
                     }
                 }
@@ -592,4 +634,45 @@ fun TimelineItem(
             }
         }
     }
+}
+
+/**
+ * 单条日志项 - 支持长按复制
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun LogItem(log: String, context: Context) {
+    val colors = BaoziTheme.colors
+    val logColor = when {
+        log.contains("❌") -> colors.error
+        log.contains("✅") -> colors.success
+        log.contains("📋") || log.contains("🎬") -> colors.secondary
+        log.contains("Step") || log.contains("=====") -> colors.primary
+        log.contains("⛔") -> colors.error
+        else -> colors.textSecondary
+    }
+    Text(
+        text = log,
+        fontSize = 12.sp,
+        color = logColor,
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(
+                onClick = { },
+                onLongClick = {
+                    copyToClipboard(context, log, "已复制")
+                }
+            )
+            .padding(vertical = 2.dp)
+    )
+}
+
+/**
+ * 复制到剪贴板
+ */
+private fun copyToClipboard(context: Context, text: String, toastMessage: String) {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    val clip = ClipData.newPlainText("roubao_log", text)
+    clipboard.setPrimaryClip(clip)
+    Toast.makeText(context, toastMessage, Toast.LENGTH_SHORT).show()
 }
