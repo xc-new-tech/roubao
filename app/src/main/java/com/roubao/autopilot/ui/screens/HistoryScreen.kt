@@ -9,6 +9,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -298,11 +299,64 @@ fun HistoryRecordCard(
 fun HistoryDetailScreen(
     record: ExecutionRecord,
     onBack: () -> Unit,
-    onRerun: (String) -> Unit = {}  // 重复执行回调，参数为任务指令
+    onRerun: (String) -> Unit = {},  // 重复执行回调，参数为任务指令
+    onSaveAsScript: ((String) -> Unit)? = null  // 保存为脚本回调，参数为脚本名称
 ) {
     val colors = BaoziTheme.colors
     // Tab 状态：0 = 时间线，1 = 日志
     var selectedTab by remember { mutableStateOf(0) }
+    // 保存脚本对话框
+    var showSaveScriptDialog by remember { mutableStateOf(false) }
+    var scriptName by remember { mutableStateOf(record.title) }
+
+    // 保存为脚本对话框
+    if (showSaveScriptDialog && onSaveAsScript != null) {
+        AlertDialog(
+            onDismissRequest = { showSaveScriptDialog = false },
+            containerColor = colors.backgroundCard,
+            title = { Text("保存为脚本", color = colors.textPrimary) },
+            text = {
+                Column {
+                    Text(
+                        text = "为脚本命名:",
+                        fontSize = 14.sp,
+                        color = colors.textSecondary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    androidx.compose.material3.OutlinedTextField(
+                        value = scriptName,
+                        onValueChange = { scriptName = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = colors.primary,
+                            unfocusedBorderColor = colors.backgroundInput,
+                            cursorColor = colors.primary,
+                            focusedTextColor = colors.textPrimary,
+                            unfocusedTextColor = colors.textPrimary
+                        )
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (scriptName.isNotBlank()) {
+                            onSaveAsScript(scriptName)
+                            showSaveScriptDialog = false
+                        }
+                    }
+                ) {
+                    Text("保存", color = colors.primary)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSaveScriptDialog = false }) {
+                    Text("取消", color = colors.textSecondary)
+                }
+            }
+        )
+    }
 
     Column(
         modifier = Modifier
@@ -393,27 +447,52 @@ fun HistoryDetailScreen(
                     }
                 }
 
-                // 重复执行按钮
+                // 操作按钮
                 Spacer(modifier = Modifier.height(16.dp))
-                Button(
-                    onClick = { onRerun(record.instruction) },
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = colors.primary
-                    ),
-                    shape = RoundedCornerShape(12.dp)
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.PlayArrow,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "重复执行",
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Medium
-                    )
+                    // 重复执行按钮
+                    Button(
+                        onClick = { onRerun(record.instruction) },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = colors.primary
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PlayArrow,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "重复执行",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+
+                    // 保存为脚本按钮
+                    if (onSaveAsScript != null && record.status == ExecutionStatus.COMPLETED) {
+                        OutlinedButton(
+                            onClick = { showSaveScriptDialog = true },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = colors.secondary
+                            ),
+                            border = BorderStroke(1.dp, colors.secondary),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(
+                                text = "📜 保存为脚本",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
                 }
             }
         }

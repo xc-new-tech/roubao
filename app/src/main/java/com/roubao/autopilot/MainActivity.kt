@@ -32,6 +32,8 @@ import com.roubao.autopilot.autoglm.AutoGLMAgent
 import com.roubao.autopilot.controller.AppScanner
 import com.roubao.autopilot.controller.DeviceController
 import com.roubao.autopilot.data.*
+import com.roubao.autopilot.script.ScriptConverter
+import com.roubao.autopilot.script.ScriptPlayer
 import com.roubao.autopilot.ui.OverlayService
 import com.roubao.autopilot.ui.screens.*
 import com.roubao.autopilot.ui.theme.*
@@ -39,8 +41,10 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.core.view.WindowCompat
 import com.roubao.autopilot.vlm.PlanningClient
 import com.roubao.autopilot.vlm.VLMClient
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import rikka.shizuku.Shizuku
 import android.util.Log
 
@@ -48,7 +52,7 @@ private const val TAG = "MainActivity"
 
 sealed class Screen(val route: String, val title: String, val icon: ImageVector, val selectedIcon: ImageVector) {
     object Home : Screen("home", "肉包", Icons.Outlined.Home, Icons.Filled.Home)
-    object Capabilities : Screen("capabilities", "能力", Icons.Outlined.Star, Icons.Filled.Star)
+    object Scripts : Screen("scripts", "脚本", Icons.Outlined.PlayArrow, Icons.Filled.PlayArrow)
     object History : Screen("history", "记录", Icons.Outlined.List, Icons.Filled.List)
     object Settings : Screen("settings", "设置", Icons.Outlined.Settings, Icons.Filled.Settings)
 }
@@ -58,6 +62,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var deviceController: DeviceController
     private lateinit var settingsManager: SettingsManager
     private lateinit var executionRepository: ExecutionRepository
+    private lateinit var scriptRepository: ScriptRepository
+    private lateinit var scriptPlayer: ScriptPlayer
 
     private val mobileAgent = mutableStateOf<MobileAgent?>(null)
     private var shizukuAvailable = mutableStateOf(false)
@@ -67,6 +73,9 @@ class MainActivity : ComponentActivity() {
 
     // 执行记录列表
     private val executionRecords = mutableStateOf<List<ExecutionRecord>>(emptyList())
+
+    // 脚本列表
+    private val scripts = mutableStateOf<List<Script>>(emptyList())
 
     // 是否正在执行（点击发送后立即为 true）
     private val isExecuting = mutableStateOf(false)
@@ -115,13 +124,16 @@ class MainActivity : ComponentActivity() {
         deviceController.setCacheDir(cacheDir)
         settingsManager = SettingsManager(this)
         executionRepository = ExecutionRepository(this)
+        scriptRepository = ScriptRepository(this)
+        scriptPlayer = ScriptPlayer(this, deviceController)
 
         // 应用手势导航设置
         deviceController.useGestureNavigation = settingsManager.settings.value.useGestureNavigation
 
-        // 加载执行记录
+        // 加载执行记录和脚本
         lifecycleScope.launch {
             executionRecords.value = executionRepository.getAllRecords()
+            scripts.value = scriptRepository.getAllScripts()
         }
 
         // 添加 Shizuku 监听器
@@ -171,6 +183,7 @@ class MainActivity : ComponentActivity() {
     fun MainApp() {
         var currentScreen by remember { mutableStateOf<Screen>(Screen.Home) }
         var selectedRecord by remember { mutableStateOf<ExecutionRecord?>(null) }
+        var selectedScript by remember { mutableStateOf<Script?>(null) }
         var showShizukuHelpDialog by remember { mutableStateOf(false) }
         var hasShownShizukuHelp by remember { mutableStateOf(false) }
 
@@ -180,6 +193,8 @@ class MainActivity : ComponentActivity() {
         val agentState by agent?.state?.collectAsState() ?: remember { mutableStateOf(null) }
         val logs by agent?.logs?.collectAsState() ?: remember { mutableStateOf(emptyList<String>()) }
         val records by remember { executionRecords }
+        val scriptList by remember { scripts }
+        val playbackState by scriptPlayer.playbackState.collectAsState()
         val isShizukuAvailable = shizukuAvailable.value && checkShizukuPermission()
         val executing by remember { isExecuting }
         val navigateToRecord by remember { shouldNavigateToRecord }
@@ -210,13 +225,13 @@ class MainActivity : ComponentActivity() {
             modifier = Modifier.background(colors.background),
             containerColor = colors.background,
             bottomBar = {
-                if (selectedRecord == null) {
+                if (selectedRecord == null && selectedScript == null) {
                     NavigationBar(
                         containerColor = colors.background,
                         contentColor = colors.textPrimary,
                         tonalElevation = 0.dp
                     ) {
-                        listOf(Screen.Home, Screen.Capabilities, Screen.History, Screen.Settings).forEach { screen ->
+                        listOf(Screen.Home, Screen.Scripts, Screen.History, Screen.Settings).forEach { screen ->
                             val selected = currentScreen == screen
                             NavigationBarItem(
                                 icon = {
@@ -247,12 +262,25 @@ class MainActivity : ComponentActivity() {
                     .padding(padding)
             ) {
                 // 处理系统返回手势
-                BackHandler(enabled = selectedRecord != null) {
-                    selectedRecord = null
+                BackHandler(enabled = selectedRecord != null || selectedScript != null) {
+                    when {
+                        selectedScript != null -> selectedScript = null
+                        selectedRecord != null -> selectedRecord = null
+                    }
                 }
 
-                // 详情页优先显示
-                if (selectedRecord != null) {
+                // 脚本详情页优先显示
+                if (selectedScript != null) {
+                    ScriptDetailScreen(
+                        script = selectedScript!!,
+                        playbackState = playbackState,
+                        onBack = { selectedScript = null },
+                        onPlay = { script, paramValues -> playScript(script, paramValues) },
+                        onStop = { scriptPlayer.stop() },
+                        onSave = { script -> saveScript(script) }
+                    )
+                } else if (selectedRecord != null) {
+                    // 执行记录详情页
                     HistoryDetailScreen(
                         record = selectedRecord!!,
                         onBack = { selectedRecord = null },
@@ -261,6 +289,9 @@ class MainActivity : ComponentActivity() {
                             selectedRecord = null
                             currentScreen = Screen.Home
                             runAgent(instruction, settings.apiKey, settings.baseUrl, settings.model, settings.maxSteps)
+                        },
+                        onSaveAsScript = { name ->
+                            saveRecordAsScript(selectedRecord!!, name)
                         }
                     )
                 } else {
@@ -294,7 +325,14 @@ class MainActivity : ComponentActivity() {
                                     isExecuting = executing
                                 )
                             }
-                            Screen.Capabilities -> CapabilitiesScreen()
+                            Screen.Scripts -> ScriptsScreen(
+                                scripts = scriptList,
+                                playbackState = playbackState,
+                                onScriptClick = { script -> selectedScript = script },
+                                onPlayScript = { script -> playScript(script) },
+                                onStopScript = { scriptPlayer.stop() },
+                                onDeleteScript = { id -> deleteScript(id) }
+                            )
                             Screen.History -> HistoryScreen(
                                 records = records,
                                 onRecordClick = { record -> selectedRecord = record },
@@ -363,8 +401,260 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun playScript(script: Script, paramValues: Map<String, String> = emptyMap()) {
+        // 检查悬浮窗权限
+        if (!Settings.canDrawOverlays(this)) {
+            Toast.makeText(this, "请授予悬浮窗权限", Toast.LENGTH_LONG).show()
+            val intent = android.content.Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName")
+            )
+            startActivity(intent)
+            return
+        }
+
+        isExecuting.value = true
+
+        // 获取设置
+        val currentSettings = settingsManager.settings.value
+        val vlmClient = VLMClient(
+            apiKey = currentSettings.apiKey,
+            baseUrl = currentSettings.baseUrl.ifBlank { "https://open.bigmodel.cn/api/paas/v4" },
+            model = currentSettings.model.ifBlank { "autoglm-phone" }
+        )
+
+        // 创建规划模型客户端 (用于异常恢复)
+        val planningConfig = currentSettings.planningConfig
+        val planningClient = if (planningConfig.enabled &&
+            planningConfig.baseUrl.isNotBlank() &&
+            planningConfig.apiKey.isNotBlank()) {
+            PlanningClient(
+                apiKey = planningConfig.apiKey,
+                baseUrl = planningConfig.baseUrl,
+                model = planningConfig.model
+            )
+        } else {
+            null
+        }
+
+        val agent = AutoGLMAgent(
+            visionClient = vlmClient,
+            deviceController = deviceController,
+            context = this,
+            planningClient = planningClient,
+            config = AutoGLMAgent.AgentConfig(
+                maxSteps = script.actions.size * 3,  // 允许一些恢复步骤
+                useStreaming = false,  // 脚本模式不需要流式
+                usePlanning = false    // 脚本模式不需要初始规划
+            )
+        )
+
+        // 更新播放状态
+        scriptPlayer.updatePlaybackState(script, true)
+
+        // 创建执行记录
+        val scriptLogs = mutableListOf<String>()
+        val paramDesc = if (paramValues.isNotEmpty()) {
+            paramValues.entries.joinToString(", ") { "${it.key}=${it.value}" }
+        } else ""
+        val record = ExecutionRecord(
+            title = "📜 ${script.name}",
+            instruction = if (paramDesc.isNotEmpty()) "脚本执行 (参数: $paramDesc)" else "脚本执行",
+            startTime = System.currentTimeMillis(),
+            status = ExecutionStatus.RUNNING
+        )
+        currentRecordId.value = record.id
+
+        // 添加脚本信息到日志
+        scriptLogs.add("========== 脚本执行 ==========")
+        scriptLogs.add("脚本名称: ${script.name}")
+        scriptLogs.add("动作数量: ${script.actions.size}")
+        if (paramValues.isNotEmpty()) {
+            scriptLogs.add("参数: $paramDesc")
+        }
+        if (script.loopConfig.enabled) {
+            val loopDesc = if (script.loopConfig.loopCount == 0) "无限" else "${script.loopConfig.loopCount}"
+            scriptLogs.add("循环: ${loopDesc}次, 间隔 ${script.loopConfig.loopDelayMs}ms")
+        }
+        scriptLogs.add("")
+
+        // 启动悬浮窗
+        OverlayService.show(this, "脚本: ${script.name}") {
+            currentExecutionJob?.cancel()
+            currentExecutionJob = null
+        }
+
+        // 取消之前的任务
+        currentExecutionJob?.cancel()
+
+        currentExecutionJob = lifecycleScope.launch {
+            // 保存初始记录
+            executionRepository.saveRecord(record)
+            executionRecords.value = executionRepository.getAllRecords()
+
+            try {
+                val callback = object : AutoGLMAgent.StepCallback {
+                    override fun onStepStart(stepNumber: Int) {
+                        val log = "========== 步骤 $stepNumber/${script.actions.size} =========="
+                        scriptLogs.add(log)
+                        OverlayService.update("步骤 $stepNumber/${script.actions.size}")
+                        scriptPlayer.updateActionIndex(stepNumber - 1)
+                        Log.d(TAG, log)
+                    }
+
+                    override fun onThinking(thinking: String) {
+                        if (thinking.isNotBlank()) {
+                            val log = "思考: ${thinking.take(100)}..."
+                            scriptLogs.add(log)
+                            Log.d(TAG, "脚本思考: $thinking")
+                        }
+                    }
+
+                    override fun onAction(action: ActionParser.ParsedAction) {
+                        val actionStr = when (action) {
+                            is ActionParser.ParsedAction.Do -> "动作: ${action.action} ${action.params}"
+                            is ActionParser.ParsedAction.Finish -> "完成: ${action.message}"
+                            is ActionParser.ParsedAction.Error -> "解析错误: ${action.reason}"
+                        }
+                        scriptLogs.add(actionStr)
+                        val desc = when (action) {
+                            is ActionParser.ParsedAction.Do -> "${action.action}"
+                            is ActionParser.ParsedAction.Finish -> "完成"
+                            is ActionParser.ParsedAction.Error -> "错误"
+                        }
+                        OverlayService.update(desc)
+                        Log.d(TAG, actionStr)
+                    }
+
+                    override fun onStepComplete(result: AutoGLMAgent.StepResult) {
+                        val status = if (result.success) "成功" else "失败"
+                        val method = result.executionMethod?.let { " (via $it)" } ?: ""
+                        val log = "步骤完成: $status$method"
+                        scriptLogs.add(log)
+                        Log.d(TAG, log)
+                    }
+
+                    override fun onSensitiveAction(message: String): Boolean {
+                        val log = "⚠️ 敏感操作: $message (已跳过)"
+                        scriptLogs.add(log)
+                        Log.w(TAG, "脚本遇到敏感操作: $message")
+                        return false  // 脚本模式下不执行敏感操作
+                    }
+
+                    override fun onTakeOver(message: String) {
+                        val log = "🖐 需要人工接管: $message"
+                        scriptLogs.add(log)
+                        Log.w(TAG, "脚本需要人工接管: $message")
+                    }
+
+                    override fun onVerification(progress: Int, isOnTrack: Boolean, suggestion: String?) {
+                        val status = if (isOnTrack) "✓ 正常" else "⚠ 偏离"
+                        scriptLogs.add("🔍 验证: $progress% $status")
+                        suggestion?.let { scriptLogs.add("  建议: $it") }
+                        Log.d(TAG, "验证: $progress% on_track=$isOnTrack suggestion=$suggestion")
+                    }
+                }
+
+                val result = agent.runWithScript(script, paramValues, callback)
+
+                // 保存执行结果
+                scriptLogs.add("")
+                scriptLogs.add("========== 执行结果 ==========")
+                scriptLogs.add("状态: ${if (result.success) "成功" else "失败"}")
+                scriptLogs.add("消息: ${result.message}")
+                scriptLogs.add("步骤数: ${result.stepCount}")
+
+                val updatedRecord = record.copy(
+                    endTime = System.currentTimeMillis(),
+                    status = if (result.success) ExecutionStatus.COMPLETED else ExecutionStatus.FAILED,
+                    logs = scriptLogs,
+                    resultMessage = result.message
+                )
+                executionRepository.saveRecord(updatedRecord)
+                executionRecords.value = executionRepository.getAllRecords()
+
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        this@MainActivity,
+                        if (result.success) "脚本执行完成" else "脚本执行失败: ${result.message}",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+
+            } catch (e: CancellationException) {
+                withContext(kotlinx.coroutines.NonCancellable) {
+                    scriptLogs.add("")
+                    scriptLogs.add("========== 执行取消 ==========")
+                    scriptLogs.add("用户手动停止执行")
+
+                    val updatedRecord = record.copy(
+                        endTime = System.currentTimeMillis(),
+                        status = ExecutionStatus.STOPPED,
+                        logs = scriptLogs,
+                        resultMessage = "已取消"
+                    )
+                    executionRepository.saveRecord(updatedRecord)
+                    executionRecords.value = executionRepository.getAllRecords()
+
+                    Log.d(TAG, "脚本被取消")
+                    Toast.makeText(this@MainActivity, "脚本已停止", Toast.LENGTH_SHORT).show()
+                    shouldNavigateToRecord.value = true
+                }
+            } catch (e: Exception) {
+                scriptLogs.add("")
+                scriptLogs.add("========== 执行错误 ==========")
+                scriptLogs.add("错误: ${e.message}")
+
+                val updatedRecord = record.copy(
+                    endTime = System.currentTimeMillis(),
+                    status = ExecutionStatus.FAILED,
+                    logs = scriptLogs,
+                    resultMessage = "错误: ${e.message}"
+                )
+                executionRepository.saveRecord(updatedRecord)
+                executionRecords.value = executionRepository.getAllRecords()
+
+                Log.e(TAG, "脚本执行错误", e)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "脚本执行错误: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            } finally {
+                withContext(Dispatchers.Main) {
+                    isExecuting.value = false
+                    scriptPlayer.updatePlaybackState(null, false)
+                    OverlayService.hide(this@MainActivity)
+                }
+            }
+        }
+    }
+
+    private fun saveScript(script: Script) {
+        lifecycleScope.launch {
+            scriptRepository.saveScript(script)
+            scripts.value = scriptRepository.getAllScripts()
+            Toast.makeText(this@MainActivity, "脚本已保存", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun deleteScript(id: String) {
+        lifecycleScope.launch {
+            scriptRepository.deleteScript(id)
+            scripts.value = scriptRepository.getAllScripts()
+        }
+    }
+
+    fun saveRecordAsScript(record: ExecutionRecord, name: String) {
+        lifecycleScope.launch {
+            val script = ScriptConverter.fromExecutionRecord(record, name)
+            scriptRepository.saveScript(script)
+            scripts.value = scriptRepository.getAllScripts()
+            Toast.makeText(this@MainActivity, "已保存为脚本", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        scriptPlayer.release()
         Shizuku.removeBinderReceivedListener(binderReceivedListener)
         Shizuku.removeBinderDeadListener(binderDeadListener)
         Shizuku.removeRequestPermissionResultListener(permissionResultListener)

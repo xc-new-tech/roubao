@@ -6,6 +6,8 @@ import android.graphics.Bitmap
 import android.util.Log
 import com.roubao.autopilot.controller.DeviceController
 import com.roubao.autopilot.controller.DeviceController.ExecutionMethod
+import com.roubao.autopilot.data.Script
+import com.roubao.autopilot.data.ScriptAction
 import com.roubao.autopilot.ui.OverlayService
 import com.roubao.autopilot.vlm.PlanningClient
 import com.roubao.autopilot.vlm.VLMClient
@@ -716,4 +718,433 @@ class AutoGLMAgent(
      * 获取上下文消息数
      */
     fun getContextSize(): Int = context.size
+
+    // ===================== 脚本模式 =====================
+
+    /**
+     * 脚本模式运行
+     * 优先按脚本动作执行，VLM 负责监督和异常处理
+     *
+     * @param script 要执行的脚本
+     * @param paramValues 参数值映射
+     * @param callback 步骤回调
+     */
+    suspend fun runWithScript(
+        script: Script,
+        paramValues: Map<String, String> = emptyMap(),
+        callback: StepCallback? = null
+    ): AgentResult = withContext(Dispatchers.Default) {
+        // 重置状态
+        context.clear()
+        stepCount = 0
+        recentActions.clear()
+        currentTask = "执行脚本: ${script.name}"
+
+        if (script.actions.isEmpty()) {
+            return@withContext AgentResult(false, "脚本没有任何动作", 0)
+        }
+
+        try {
+            val loopConfig = script.loopConfig
+            val totalLoops = when {
+                loopConfig.enabled && loopConfig.loopCount > 0 -> loopConfig.loopCount
+                loopConfig.enabled && loopConfig.loopCount == 0 -> Int.MAX_VALUE
+                else -> 1
+            }
+
+            // 回调规划步骤（脚本动作作为预设计划）
+            callback?.onPlanReady(script.actions.map { "${it.actionType}: ${it.description}" })
+
+            var loop = 1
+            var consecutiveFailures = 0
+            val maxConsecutiveFailures = 3  // 连续失败次数阈值
+            val verifyInterval = 3  // 每隔 N 步进行 VLM 验证
+
+            while (loop <= totalLoops && coroutineContext.isActive) {
+                if (config.verbose) {
+                    Log.d(TAG, "===== 脚本循环 $loop/$totalLoops =====")
+                }
+
+                for ((index, scriptAction) in script.actions.withIndex()) {
+                    if (!coroutineContext.isActive) break
+
+                    stepCount++
+                    callback?.onStepStart(stepCount)
+
+                    // 替换参数
+                    val substitutedAction = substituteActionParams(scriptAction, paramValues, script)
+
+                    if (config.verbose) {
+                        Log.d(TAG, "执行脚本动作 ${index + 1}/${script.actions.size}: ${substitutedAction.actionType}")
+                    }
+
+                    // 执行脚本动作
+                    val result = executeScriptAction(substitutedAction, callback)
+
+                    if (!result.success) {
+                        consecutiveFailures++
+                        Log.w(TAG, "动作执行失败 (连续失败: $consecutiveFailures)")
+
+                        if (consecutiveFailures >= maxConsecutiveFailures) {
+                            // 连续失败过多，尝试 VLM 介入
+                            if (config.verbose) {
+                                Log.d(TAG, "连续失败过多，VLM 介入调整...")
+                            }
+
+                            val recoveryResult = attemptVLMRecovery(
+                                script.name,
+                                substitutedAction,
+                                index,
+                                script.actions.size,
+                                callback
+                            )
+
+                            if (!recoveryResult.success) {
+                                if (loopConfig.stopOnError) {
+                                    return@withContext AgentResult(
+                                        false,
+                                        "脚本执行失败: ${result.message ?: substitutedAction.actionType}",
+                                        stepCount
+                                    )
+                                }
+                            } else {
+                                consecutiveFailures = 0  // VLM 恢复成功，重置计数
+                            }
+                        }
+                    } else {
+                        consecutiveFailures = 0  // 成功执行，重置计数
+                    }
+
+                    callback?.onStepComplete(result)
+
+                    // 动作后延时
+                    if (substitutedAction.delayAfterMs > 0) {
+                        delay(substitutedAction.delayAfterMs)
+                    }
+
+                    // === 阶段性 VLM 验证 ===
+                    // 每隔 N 步检查执行结果是否符合预期
+                    if ((index + 1) % verifyInterval == 0 && index < script.actions.size - 1) {
+                        val verifyResult = verifyScriptProgress(
+                            script.name,
+                            index + 1,
+                            script.actions.size,
+                            script.actions.getOrNull(index + 1),
+                            callback
+                        )
+                        if (!verifyResult.onTrack) {
+                            if (config.verbose) {
+                                Log.w(TAG, "VLM 验证: 执行偏离预期 - ${verifyResult.message}")
+                            }
+                            // 如果严重偏离，尝试恢复
+                            if (verifyResult.needsRecovery) {
+                                val recoveryResult = attemptVLMRecovery(
+                                    script.name,
+                                    script.actions.getOrNull(index + 1) ?: substitutedAction,
+                                    index + 1,
+                                    script.actions.size,
+                                    callback
+                                )
+                                if (!recoveryResult.success && loopConfig.stopOnError) {
+                                    return@withContext AgentResult(
+                                        false,
+                                        "脚本执行偏离: ${verifyResult.message}",
+                                        stepCount
+                                    )
+                                }
+                            }
+                        } else if (config.verbose) {
+                            Log.d(TAG, "VLM 验证: 执行正常")
+                        }
+                    }
+                }
+
+                // 循环间延时
+                if (loopConfig.enabled && loop < totalLoops && loopConfig.loopDelayMs > 0) {
+                    delay(loopConfig.loopDelayMs)
+                }
+
+                loop++
+            }
+
+            AgentResult(true, "脚本执行完成", stepCount)
+
+        } catch (e: CancellationException) {
+            AgentResult(false, "脚本被取消", stepCount)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            AgentResult(false, "脚本执行出错: ${e.message}", stepCount)
+        }
+    }
+
+    /**
+     * 替换脚本动作中的参数
+     */
+    private fun substituteActionParams(
+        action: ScriptAction,
+        paramValues: Map<String, String>,
+        script: Script
+    ): ScriptAction {
+        if (paramValues.isEmpty()) return action
+
+        val newParams = action.params.toMutableMap()
+
+        // 替换 text 参数
+        (newParams["text"] as? String)?.let { text ->
+            newParams["text"] = substituteParamValue(text, paramValues, script)
+        }
+
+        // 替换 app 参数
+        (newParams["app"] as? String)?.let { app ->
+            newParams["app"] = substituteParamValue(app, paramValues, script)
+        }
+
+        return action.copy(params = newParams)
+    }
+
+    /**
+     * 替换单个字符串中的参数值
+     */
+    private fun substituteParamValue(
+        text: String,
+        paramValues: Map<String, String>,
+        script: Script
+    ): String {
+        var result = text
+
+        // 方式1: 替换 ${param_name} 占位符
+        val placeholderRegex = Regex("""\$\{(\w+)\}""")
+        result = placeholderRegex.replace(result) { match ->
+            val paramName = match.groupValues[1]
+            paramValues[paramName] ?: match.value
+        }
+
+        // 方式2: 用 originalValue 匹配并替换
+        for ((paramName, paramValue) in paramValues) {
+            if (paramValue.isNotEmpty()) {
+                val param = script.params.find { it.name == paramName }
+                val originalValue = param?.originalValue
+                if (!originalValue.isNullOrEmpty()) {
+                    // 用原始值匹配，替换为用户输入的新值
+                    result = result.replace(originalValue, paramValue)
+                }
+            }
+        }
+
+        return result
+    }
+
+    /**
+     * 执行单个脚本动作
+     */
+    private suspend fun executeScriptAction(
+        action: ScriptAction,
+        callback: StepCallback?
+    ): StepResult = withContext(Dispatchers.IO) {
+        try {
+            val (screenWidth, screenHeight) = deviceController.getScreenSize()
+
+            // 构造 ParsedAction.Do
+            val parsedAction = ActionParser.ParsedAction.Do(
+                action = action.actionType,
+                params = action.params
+            )
+
+            callback?.onAction(parsedAction)
+
+            // 使用现有的 executeAction 方法
+            executeAction(parsedAction, screenWidth, screenHeight, callback)
+
+        } catch (e: Exception) {
+            Log.e(TAG, "执行脚本动作失败: ${action.actionType}", e)
+            StepResult(false, false, null, "", "执行失败: ${e.message}")
+        }
+    }
+
+    /**
+     * VLM 介入尝试恢复
+     * 当脚本动作连续失败时，让 VLM 分析当前屏幕并决定如何继续
+     */
+    private suspend fun attemptVLMRecovery(
+        scriptName: String,
+        failedAction: ScriptAction,
+        actionIndex: Int,
+        totalActions: Int,
+        callback: StepCallback?
+    ): StepResult = withContext(Dispatchers.IO) {
+        try {
+            // 截图分析当前状态
+            OverlayService.setVisible(false)
+            delay(100)
+            val screenshotResult = deviceController.screenshotWithFallback()
+            OverlayService.setVisible(true)
+            val screenshot = screenshotResult.bitmap
+            val (screenWidth, screenHeight) = deviceController.getScreenSize()
+
+            if (screenshotResult.isSensitive) {
+                return@withContext StepResult(
+                    false, true, null, "",
+                    "检测到敏感页面，停止执行"
+                )
+            }
+
+            // 构建恢复提示
+            val recoveryPrompt = """
+脚本「$scriptName」在执行第 ${actionIndex + 1}/$totalActions 步时遇到问题。
+预期动作: ${failedAction.actionType} - ${failedAction.description}
+请分析当前屏幕，判断：
+1. 如果能继续执行原动作，请执行
+2. 如果需要调整（如元素位置变化），请给出正确的动作
+3. 如果无法继续，请返回 Finish{message="无法继续执行"}
+""".trim()
+
+            // 初始化上下文（如果是首次）
+            if (context.isEmpty()) {
+                val systemPrompt = config.systemPrompt ?: MessageBuilder.getSystemPrompt()
+                context.add(MessageBuilder.createSystemMessage(systemPrompt))
+            }
+
+            // 添加恢复请求
+            val currentApp = getCurrentApp()
+            context.add(MessageBuilder.buildFirstUserMessage(
+                recoveryPrompt,
+                screenshot,
+                currentApp,
+                null
+            ))
+
+            // 调用 VLM
+            val messagesJson = JSONArray().apply {
+                context.forEach { put(it) }
+            }
+
+            val vlmResult = visionClient.predictWithContext(messagesJson)
+            if (vlmResult.isFailure) {
+                return@withContext StepResult(false, false, null, "", "VLM 调用失败")
+            }
+
+            val rawResponse = vlmResult.getOrNull()!!
+            val thinking = ActionParser.extractThinking(rawResponse)
+            val actionStr = ActionParser.extractAction(rawResponse)
+            val parsedAction = ActionParser.parse(actionStr)
+
+            callback?.onThinking(thinking)
+
+            // 移除图片
+            if (context.isNotEmpty()) {
+                val lastIndex = context.lastIndex
+                context[lastIndex] = MessageBuilder.removeImagesFromMessage(context[lastIndex])
+            }
+
+            // 添加助手响应
+            context.add(MessageBuilder.createAssistantMessage(
+                "<think>$thinking</think><answer>$actionStr</answer>"
+            ))
+
+            // 执行 VLM 建议的动作
+            when (parsedAction) {
+                is ActionParser.ParsedAction.Finish -> {
+                    callback?.onAction(parsedAction)
+                    StepResult(false, true, parsedAction, thinking, parsedAction.message)
+                }
+                is ActionParser.ParsedAction.Do -> {
+                    callback?.onAction(parsedAction)
+                    val result = executeAction(parsedAction, screenWidth, screenHeight, callback)
+                    recentActions.add("${parsedAction.action}: ${parsedAction.params}")
+                    result
+                }
+                is ActionParser.ParsedAction.Error -> {
+                    StepResult(false, false, parsedAction, thinking, "VLM 动作解析失败")
+                }
+            }
+
+        } catch (e: Exception) {
+            Log.e(TAG, "VLM 恢复失败", e)
+            StepResult(false, false, null, "", "VLM 恢复失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 验证结果
+     */
+    data class VerifyResult(
+        val onTrack: Boolean,        // 是否在正确轨道上
+        val message: String,         // 验证消息
+        val needsRecovery: Boolean   // 是否需要恢复操作
+    )
+
+    /**
+     * 验证脚本执行进度
+     * 截图并让 VLM 判断当前状态是否符合预期
+     */
+    private suspend fun verifyScriptProgress(
+        scriptName: String,
+        completedSteps: Int,
+        totalSteps: Int,
+        nextAction: ScriptAction?,
+        callback: StepCallback?
+    ): VerifyResult = withContext(Dispatchers.IO) {
+        try {
+            // 截图
+            OverlayService.setVisible(false)
+            delay(100)
+            val screenshotResult = deviceController.screenshotWithFallback()
+            OverlayService.setVisible(true)
+
+            if (screenshotResult.isSensitive) {
+                return@withContext VerifyResult(false, "检测到敏感页面", true)
+            }
+
+            val screenshot = screenshotResult.bitmap
+            val currentApp = getCurrentApp()
+
+            // 构建验证提示
+            val nextActionDesc = nextAction?.let {
+                "${it.actionType}: ${it.description.ifEmpty { it.params.toString() }}"
+            } ?: "完成"
+
+            val verifyPrompt = """
+你正在验证脚本「$scriptName」的执行进度。
+已完成: $completedSteps/$totalSteps 步
+下一步预期动作: $nextActionDesc
+
+请分析当前屏幕，判断：
+1. 当前状态是否正常（之前的动作是否都执行成功了）？
+2. 下一步动作是否可以正常执行？
+
+请回答 "正常" 或 "异常: [原因]"
+""".trim()
+
+            // 构建消息（简化版，不保存上下文）
+            val systemPrompt = "你是一个脚本执行验证助手。请简洁地判断当前屏幕状态。"
+            val messages = JSONArray().apply {
+                put(MessageBuilder.createSystemMessage(systemPrompt))
+                put(MessageBuilder.buildFirstUserMessage(verifyPrompt, screenshot, currentApp, null))
+            }
+
+            val vlmResult = visionClient.predictWithContext(messages)
+            if (vlmResult.isFailure) {
+                // VLM 调用失败，默认认为正常（不阻塞执行）
+                return@withContext VerifyResult(true, "验证跳过: VLM 不可用", false)
+            }
+
+            val response = vlmResult.getOrNull()!!.lowercase()
+            callback?.onThinking("验证: $response")
+
+            // 解析验证结果
+            val isOnTrack = response.contains("正常") && !response.contains("异常")
+            val needsRecovery = response.contains("异常") || response.contains("错误") || response.contains("失败")
+
+            VerifyResult(
+                onTrack = isOnTrack,
+                message = response.take(100),
+                needsRecovery = needsRecovery
+            )
+
+        } catch (e: Exception) {
+            Log.e(TAG, "验证失败", e)
+            // 验证失败不阻塞执行
+            VerifyResult(true, "验证跳过: ${e.message}", false)
+        }
+    }
 }
