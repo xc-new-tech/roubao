@@ -7,8 +7,11 @@ import androidx.core.content.FileProvider
 import java.io.File
 import java.io.FileWriter
 import java.io.PrintWriter
+import android.util.Log
 import java.text.SimpleDateFormat
 import java.util.*
+
+private const val TAG = "CrashHandler"
 
 /**
  * 全局崩溃捕获器
@@ -201,7 +204,7 @@ class CrashHandler private constructor() : Thread.UncaughtExceptionHandler {
                 throwable.printStackTrace(writer)
             }
 
-            println("[CrashHandler] 崩溃日志已保存: $fileName")
+            Log.d(TAG, "崩溃日志已保存: $fileName")
         } catch (e: Exception) {
             e.printStackTrace()
         }

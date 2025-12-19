@@ -3,9 +3,12 @@ package com.roubao.autopilot.controller
 import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+
+private const val TAG = "AppScanner"
 
 /**
  * App 扫描器 - 获取所有已安装应用信息
@@ -164,7 +167,7 @@ class AppScanner(private val context: Context) {
             val loaded = loadFromFile(cacheFile)
             if (loaded.isNotEmpty()) {
                 cachedApps = loaded
-                println("[AppScanner] 从文件加载 ${loaded.size} 个应用")
+                Log.d(TAG, " 从文件加载 ${loaded.size} 个应用")
                 return loaded
             }
         }
@@ -176,13 +179,13 @@ class AppScanner(private val context: Context) {
      * 强制刷新应用列表
      */
     fun refreshApps(): List<AppInfo> {
-        println("[AppScanner] 扫描已安装应用...")
+        Log.d(TAG, " 扫描已安装应用...")
         val apps = scanAllApps()
         cachedApps = apps
 
         val cacheFile = File(context.filesDir, CACHE_FILE)
         saveToFile(apps, cacheFile)
-        println("[AppScanner] 已缓存 ${apps.size} 个应用")
+        Log.d(TAG, " 已缓存 ${apps.size} 个应用")
 
         return apps
     }

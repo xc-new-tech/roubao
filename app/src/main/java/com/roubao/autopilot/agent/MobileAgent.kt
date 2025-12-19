@@ -3,6 +3,7 @@ package com.roubao.autopilot.agent
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.util.Log
 import com.roubao.autopilot.App
 import com.roubao.autopilot.controller.AppScanner
 import com.roubao.autopilot.controller.DeviceController
@@ -20,6 +21,8 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.coroutineContext
 import kotlin.coroutines.resume
+
+private const val TAG = "MobileAgent"
 
 /**
  * Mobile Agent 主循环 - 移植自 MobileAgent-v3
@@ -43,12 +46,12 @@ class MobileAgent(
     // Skill 管理器
     private val skillManager: SkillManager? = try {
         SkillManager.getInstance().also {
-            println("[肉包] SkillManager 已加载，共 ${it.getAllSkills().size} 个 Skills")
+            Log.d(TAG, " SkillManager 已加载，共 ${it.getAllSkills().size} 个 Skills")
             // 设置 VLM 客户端用于意图匹配
             it.setVLMClient(vlmClient)
         }
     } catch (e: Exception) {
-        println("[肉包] SkillManager 加载失败: ${e.message}")
+        Log.d(TAG, " SkillManager 加载失败: ${e.message}")
         null
     }
 
@@ -617,7 +620,7 @@ class MobileAgent(
     }
 
     private fun log(message: String) {
-        println("[肉包] $message")
+        Log.d(TAG, " $message")
         _logs.value = _logs.value + message
     }
 

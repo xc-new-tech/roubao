@@ -2,9 +2,12 @@ package com.roubao.autopilot.agent
 
 import android.graphics.Bitmap
 import android.util.Base64
+import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+
+private const val TAG = "ConversationMemory"
 
 /**
  * 对话记忆管理 - 保存完整对话历史，图片用完即删
@@ -56,7 +59,7 @@ class ConversationMemory {
         for (i in messages.indices.reversed()) {
             if (messages[i].role == "user" && messages[i].imageBase64 != null) {
                 messages[i].imageBase64 = null
-                println("[ConversationMemory] 已删除第 $i 条消息的图片")
+                Log.d(TAG, " 已删除第 $i 条消息的图片")
                 break
             }
         }

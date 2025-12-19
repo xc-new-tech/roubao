@@ -1,7 +1,9 @@
 package com.roubao.autopilot.autoglm
 
+import android.app.ActivityManager
 import android.content.Context
 import android.graphics.Bitmap
+import android.util.Log
 import com.roubao.autopilot.controller.DeviceController
 import com.roubao.autopilot.controller.DeviceController.ExecutionMethod
 import com.roubao.autopilot.ui.OverlayService
@@ -26,15 +28,19 @@ class AutoGLMAgent(
     private val deviceController: DeviceController,
     private val appPackages: AppPackages? = null,
     private val planningClient: PlanningClient? = null,  // 规划模型 (Claude, 可选)
-    private val config: AgentConfig = AgentConfig()
+    private val config: AgentConfig = AgentConfig(),
+    private val appContext: Context? = null        // 用于获取前台应用等系统信息
 ) {
+    companion object {
+        private const val TAG = "AutoGLMAgent"
+    }
     // 兼容旧构造函数
     constructor(
         vlmClient: VLMClient,
         deviceController: DeviceController,
         appPackages: AppPackages?,
         config: AgentConfig
-    ) : this(vlmClient, deviceController, appPackages, null, config)
+    ) : this(vlmClient, deviceController, appPackages, null, config, null)
 
     /**
      * 便捷构造函数 - 使用 Context 自动创建 AppPackages
@@ -44,7 +50,7 @@ class AutoGLMAgent(
         deviceController: DeviceController,
         context: Context,
         config: AgentConfig = AgentConfig()
-    ) : this(vlmClient, deviceController, AppPackages.getInstance(context), null, config)
+    ) : this(vlmClient, deviceController, AppPackages.getInstance(context), null, config, context.applicationContext)
 
     /**
      * 完整构造函数 - 双模型 + Context
@@ -55,7 +61,7 @@ class AutoGLMAgent(
         context: Context,
         planningClient: PlanningClient?,
         config: AgentConfig = AgentConfig()
-    ) : this(visionClient, deviceController, AppPackages.getInstance(context), planningClient, config)
+    ) : this(visionClient, deviceController, AppPackages.getInstance(context), planningClient, config, context.applicationContext)
 
     /**
      * Agent 配置
@@ -157,21 +163,21 @@ class AutoGLMAgent(
             // === 规划阶段 (如果有 planningClient) ===
             if (planningClient != null && config.usePlanning) {
                 if (config.verbose) {
-                    println("[AutoGLMAgent] 使用 Claude 进行任务规划...")
+                    Log.d(TAG, "使用 Claude 进行任务规划...")
                 }
                 val planResult = planningClient.planTask(task)
                 if (planResult.isSuccess) {
                     taskPlan = planResult.getOrNull()
                     if (config.verbose) {
-                        println("[AutoGLMAgent] 规划完成: ${taskPlan?.steps?.size} 步")
+                        Log.d(TAG, "规划完成: ${taskPlan?.steps?.size} 步")
                         taskPlan?.steps?.forEachIndexed { i, step ->
-                            println("  ${i + 1}. $step")
+                            Log.d(TAG, "  ${i + 1}. $step")
                         }
                     }
                     callback?.onPlanReady(taskPlan?.steps ?: emptyList())
                 } else {
                     if (config.verbose) {
-                        println("[AutoGLMAgent] 规划失败: ${planResult.exceptionOrNull()?.message}")
+                        Log.w(TAG, "规划失败: ${planResult.exceptionOrNull()?.message}")
                     }
                     // 规划失败不影响执行，继续使用视觉模型
                 }
@@ -238,7 +244,7 @@ class AutoGLMAgent(
         val plan = taskPlan ?: return
 
         if (config.verbose) {
-            println("[AutoGLMAgent] 验证进度 (步骤 $stepCount)...")
+            Log.d(TAG, "验证进度 (步骤 $stepCount)...")
         }
 
         val verifyResult = planner.verifyProgress(
@@ -252,8 +258,8 @@ class AutoGLMAgent(
         if (verifyResult.isSuccess) {
             val result = verifyResult.getOrNull()!!
             if (config.verbose) {
-                println("[AutoGLMAgent] 验证结果: ${result.progress}% on_track=${result.isOnTrack}")
-                result.suggestion?.let { println("[AutoGLMAgent] 建议: $it") }
+                Log.d(TAG, "验证结果: ${result.progress}% on_track=${result.isOnTrack}")
+                result.suggestion?.let { Log.d(TAG, "建议: $it") }
             }
             callback?.onVerification(result.progress, result.isOnTrack, result.suggestion)
         }
@@ -271,7 +277,7 @@ class AutoGLMAgent(
         callback?.onStepStart(stepCount)
 
         if (config.verbose) {
-            println("[AutoGLMAgent] ===== Step $stepCount =====")
+            Log.d(TAG, "===== Step $stepCount =====")
         }
 
         // 1. 截图获取当前屏幕 (先隐藏悬浮窗)
@@ -285,7 +291,7 @@ class AutoGLMAgent(
         // 检查敏感页面
         if (screenshotResult.isSensitive) {
             if (config.verbose) {
-                println("[AutoGLMAgent] 检测到敏感页面，自动停止")
+                Log.w(TAG, "检测到敏感页面，自动停止")
             }
             return@withContext StepResult(
                 success = false,
@@ -319,7 +325,7 @@ class AutoGLMAgent(
 
         // 4. 调用视觉模型获取响应
         if (config.verbose) {
-            println("[AutoGLMAgent] 调用视觉模型 (streaming=${config.useStreaming})...")
+            Log.d(TAG, "调用视觉模型 (streaming=${config.useStreaming})...")
         }
 
         val messagesJson = JSONArray().apply {
@@ -338,7 +344,7 @@ class AutoGLMAgent(
                 object : com.roubao.autopilot.vlm.VLMClient.StreamCallback {
                     override fun onFirstToken(timeToFirstTokenMs: Long) {
                         if (config.verbose) {
-                            println("[AutoGLMAgent] 首 token: ${timeToFirstTokenMs}ms")
+                            Log.d(TAG, "首 token: ${timeToFirstTokenMs}ms")
                         }
                     }
 
@@ -349,20 +355,20 @@ class AutoGLMAgent(
 
                     override fun onActionStart() {
                         if (config.verbose) {
-                            println("[AutoGLMAgent] 检测到动作...")
+                            Log.d(TAG, "检测到动作...")
                         }
                     }
 
                     override fun onComplete(response: com.roubao.autopilot.vlm.VLMClient.StreamResponse) {
                         if (config.verbose) {
-                            println("[AutoGLMAgent] 流式完成: TTFT=${response.timeToFirstTokenMs}ms, Total=${response.totalTimeMs}ms")
+                            Log.d(TAG, "流式完成: TTFT=${response.timeToFirstTokenMs}ms, Total=${response.totalTimeMs}ms")
                         }
                         callback?.onPerformanceMetrics(response.timeToFirstTokenMs, response.totalTimeMs)
                     }
 
                     override fun onError(error: Exception) {
                         if (config.verbose) {
-                            println("[AutoGLMAgent] 流式错误: ${error.message}")
+                            Log.e(TAG, "流式错误: ${error.message}")
                         }
                     }
                 }
@@ -371,7 +377,7 @@ class AutoGLMAgent(
             if (streamResult.isFailure) {
                 val error = streamResult.exceptionOrNull()?.message ?: "未知错误"
                 if (config.verbose) {
-                    println("[AutoGLMAgent] VLM 调用失败: $error")
+                    Log.e(TAG, "VLM 调用失败: $error")
                 }
                 return@withContext StepResult(
                     success = false,
@@ -397,7 +403,7 @@ class AutoGLMAgent(
             if (vlmResult.isFailure) {
                 val error = vlmResult.exceptionOrNull()?.message ?: "未知错误"
                 if (config.verbose) {
-                    println("[AutoGLMAgent] VLM 调用失败: $error")
+                    Log.e(TAG, "VLM 调用失败: $error")
                 }
                 return@withContext StepResult(
                     success = false,
@@ -418,8 +424,8 @@ class AutoGLMAgent(
         callback?.onThinking(thinking)
 
         if (config.verbose) {
-            println("[AutoGLMAgent] 思考: $thinking")
-            println("[AutoGLMAgent] 动作: $parsedAction")
+            Log.d(TAG, "思考: $thinking")
+            Log.d(TAG, "动作: $parsedAction")
         }
 
         // 6. 从上下文中移除图片 (节省 Token)
@@ -456,7 +462,7 @@ class AutoGLMAgent(
 
             is ActionParser.ParsedAction.Error -> {
                 if (config.verbose) {
-                    println("[AutoGLMAgent] 动作解析失败: ${parsedAction.reason}")
+                    Log.w(TAG, "动作解析失败: ${parsedAction.reason}")
                 }
                 StepResult(
                     success = false,
@@ -498,12 +504,12 @@ class AutoGLMAgent(
                             lowerAppName == "chrome"
 
                     if (isBrowserRequest) {
-                        if (config.verbose) println("[AutoGLMAgent] Launch Browser: $appName")
+                        if (config.verbose) Log.d(TAG, "Launch Browser: $appName")
                         // 直接传 "浏览器"，让 DeviceController 尝试多个浏览器包名
                         deviceController.openApp("浏览器")
                     } else {
                         val packageName = appPackages?.smartMatch(appName) ?: appName
-                        if (config.verbose) println("[AutoGLMAgent] Launch: $appName -> $packageName")
+                        if (config.verbose) Log.d(TAG, "Launch: $appName -> $packageName")
                         deviceController.openApp(packageName)
                     }
                     delay(2000)
@@ -525,7 +531,7 @@ class AutoGLMAgent(
                             (element[1] as Number).toInt(),
                             screenWidth, screenHeight
                         )
-                        if (config.verbose) println("[AutoGLMAgent] Tap: ($x, $y)")
+                        if (config.verbose) Log.d(TAG, "Tap: ($x, $y)")
                         deviceController.tap(x, y)
                     }
                     StepResult(true, false, action, "", null, getExecutionMethodName())
@@ -533,7 +539,7 @@ class AutoGLMAgent(
 
                 ActionParser.Actions.TYPE, ActionParser.Actions.TYPE_NAME -> {
                     val text = action.params["text"] as? String ?: ""
-                    if (config.verbose) println("[AutoGLMAgent] Type: $text")
+                    if (config.verbose) Log.d(TAG, "Type: $text")
                     deviceController.type(text)
                     StepResult(true, false, action, "", null, getExecutionMethodName())
                 }
@@ -552,20 +558,20 @@ class AutoGLMAgent(
                             (end[1] as Number).toInt(),
                             screenWidth, screenHeight
                         )
-                        if (config.verbose) println("[AutoGLMAgent] Swipe: ($x1,$y1) -> ($x2,$y2)")
+                        if (config.verbose) Log.d(TAG, "Swipe: ($x1,$y1) -> ($x2,$y2)")
                         deviceController.swipe(x1, y1, x2, y2)
                     }
                     StepResult(true, false, action, "", null, getExecutionMethodName())
                 }
 
                 ActionParser.Actions.BACK -> {
-                    if (config.verbose) println("[AutoGLMAgent] Back")
+                    if (config.verbose) Log.d(TAG, "Back")
                     deviceController.back()
                     StepResult(true, false, action, "", null, getExecutionMethodName())
                 }
 
                 ActionParser.Actions.HOME -> {
-                    if (config.verbose) println("[AutoGLMAgent] Home")
+                    if (config.verbose) Log.d(TAG, "Home")
                     deviceController.home()
                     StepResult(true, false, action, "", null, getExecutionMethodName())
                 }
@@ -578,7 +584,7 @@ class AutoGLMAgent(
                             (element[1] as Number).toInt(),
                             screenWidth, screenHeight
                         )
-                        if (config.verbose) println("[AutoGLMAgent] Long Press: ($x, $y)")
+                        if (config.verbose) Log.d(TAG, "Long Press: ($x, $y)")
                         deviceController.longPress(x, y)
                     }
                     StepResult(true, false, action, "", null, getExecutionMethodName())
@@ -592,7 +598,7 @@ class AutoGLMAgent(
                             (element[1] as Number).toInt(),
                             screenWidth, screenHeight
                         )
-                        if (config.verbose) println("[AutoGLMAgent] Double Tap: ($x, $y)")
+                        if (config.verbose) Log.d(TAG, "Double Tap: ($x, $y)")
                         deviceController.doubleTap(x, y)
                     }
                     StepResult(true, false, action, "", null, getExecutionMethodName())
@@ -601,30 +607,30 @@ class AutoGLMAgent(
                 ActionParser.Actions.WAIT -> {
                     val duration = action.params["duration"] as? String ?: "1 seconds"
                     val seconds = duration.replace(Regex("[^0-9.]"), "").toFloatOrNull() ?: 1f
-                    if (config.verbose) println("[AutoGLMAgent] Wait: ${seconds}s")
+                    if (config.verbose) Log.d(TAG, "Wait: ${seconds}s")
                     delay((seconds * 1000).toLong())
                     StepResult(true, false, action, "", null)
                 }
 
                 ActionParser.Actions.TAKE_OVER -> {
                     val message = action.params["message"] as? String ?: "需要用户协助"
-                    if (config.verbose) println("[AutoGLMAgent] Take Over: $message")
+                    if (config.verbose) Log.d(TAG, "Take Over: $message")
                     callback?.onTakeOver(message)
                     StepResult(true, false, action, "", null)
                 }
 
                 ActionParser.Actions.NOTE, ActionParser.Actions.CALL_API -> {
-                    if (config.verbose) println("[AutoGLMAgent] ${action.action} (placeholder)")
+                    if (config.verbose) Log.d(TAG, "${action.action} (placeholder)")
                     StepResult(true, false, action, "", null)
                 }
 
                 ActionParser.Actions.INTERACT -> {
-                    if (config.verbose) println("[AutoGLMAgent] Interact (placeholder)")
+                    if (config.verbose) Log.d(TAG, "Interact (placeholder)")
                     StepResult(true, false, action, "", null)
                 }
 
                 else -> {
-                    if (config.verbose) println("[AutoGLMAgent] 未知动作: ${action.action}")
+                    if (config.verbose) Log.w(TAG, "未知动作: ${action.action}")
                     StepResult(false, false, action, "", "未知动作: ${action.action}")
                 }
             }
@@ -655,10 +661,49 @@ class AutoGLMAgent(
     }
 
     /**
-     * 获取当前应用
+     * 获取当前前台应用
+     * 优先使用 Shizuku shell 命令获取，回退到 ActivityManager
      */
     private fun getCurrentApp(): String {
-        // TODO: 实现获取当前前台应用的逻辑
+        // 方法1: 使用 Shizuku dumpsys 获取前台应用 (更可靠)
+        try {
+            val result = deviceController.exec("dumpsys activity activities | grep mResumedActivity | head -1")
+            if (result.isNotEmpty()) {
+                // 解析格式: mResumedActivity: ActivityRecord{xxx com.example.app/.MainActivity t123}
+                val packageMatch = Regex("""(\S+)/\.""").find(result)
+                if (packageMatch != null) {
+                    val packageName = packageMatch.groupValues[1]
+                    // 尝试获取应用名称
+                    val appName = appPackages?.getAppName(packageName) ?: packageName
+                    if (config.verbose) Log.d(TAG, "当前应用: $appName ($packageName)")
+                    return appName
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "通过 dumpsys 获取前台应用失败: ${e.message}")
+        }
+
+        // 方法2: 使用 ActivityManager (需要 QUERY_ALL_PACKAGES 权限)
+        try {
+            val ctx = appContext ?: return "unknown"
+            val activityManager = ctx.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            if (activityManager != null) {
+                @Suppress("DEPRECATION")
+                val runningTasks = activityManager.getRunningTasks(1)
+                if (runningTasks.isNotEmpty()) {
+                    val topActivity = runningTasks[0].topActivity
+                    if (topActivity != null) {
+                        val packageName = topActivity.packageName
+                        val appName = appPackages?.getAppName(packageName) ?: packageName
+                        if (config.verbose) Log.d(TAG, "当前应用 (AM): $appName ($packageName)")
+                        return appName
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "通过 ActivityManager 获取前台应用失败: ${e.message}")
+        }
+
         return "unknown"
     }
 

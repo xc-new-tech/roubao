@@ -12,6 +12,7 @@ import android.graphics.*
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
@@ -34,6 +35,7 @@ class OverlayService : Service() {
     private var animator: ValueAnimator? = null
 
     companion object {
+        private const val TAG = "OverlayService"
         private var instance: OverlayService? = null
         private var stopCallback: (() -> Unit)? = null
         private var continueCallback: (() -> Unit)? = null
@@ -135,7 +137,7 @@ class OverlayService : Service() {
         try {
             createOverlayView()
         } catch (e: Exception) {
-            println("[OverlayService] createOverlayView failed: ${e.message}")
+            Log.e(TAG, " createOverlayView failed: ${e.message}")
         }
 
         // 处理在 service 启动前排队的回调
@@ -178,7 +180,7 @@ class OverlayService : Service() {
 
             startForeground(1001, notification)
         } catch (e: Exception) {
-            println("[OverlayService] startForegroundNotification error: ${e.message}")
+            Log.e(TAG, " startForegroundNotification error: ${e.message}")
             // 降级：使用最简单的通知确保 startForeground 被调用
             try {
                 val fallbackNotification = NotificationCompat.Builder(this, channelId)
@@ -187,7 +189,7 @@ class OverlayService : Service() {
                     .build()
                 startForeground(1001, fallbackNotification)
             } catch (e2: Exception) {
-                println("[OverlayService] fallback startForeground also failed: ${e2.message}")
+                Log.e(TAG, " fallback startForeground also failed: ${e2.message}")
             }
         }
     }
@@ -198,9 +200,33 @@ class OverlayService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+
+        // 清理动画，防止内存泄漏
+        animator?.let { anim ->
+            anim.removeAllUpdateListeners()
+            anim.cancel()
+        }
+        animator = null
+
+        // 移除悬浮窗
+        overlayView?.let {
+            try {
+                windowManager?.removeView(it)
+            } catch (e: Exception) {
+                Log.w(TAG, "移除悬浮窗失败: ${e.message}")
+            }
+        }
+        overlayView = null
+        buttonView = null
+        windowManager = null
+
+        // 清理静态回调引用，防止内存泄漏
+        stopCallback = null
+        continueCallback = null
+        confirmCallback = null
+        pendingCallbacks.clear()
+
         instance = null
-        animator?.cancel()
-        overlayView?.let { windowManager?.removeView(it) }
     }
 
     /** dp 转 px */

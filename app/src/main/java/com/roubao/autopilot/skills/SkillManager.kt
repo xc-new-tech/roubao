@@ -3,10 +3,13 @@ package com.roubao.autopilot.skills
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.util.Log
 import com.roubao.autopilot.controller.AppScanner
 import com.roubao.autopilot.tools.ToolManager
 import com.roubao.autopilot.vlm.VLMClient
 import org.json.JSONObject
+
+private const val TAG = "SkillManager"
 
 /**
  * Skill 管理器
@@ -40,7 +43,7 @@ class SkillManager private constructor(
      */
     fun initialize() {
         val loadedCount = registry.loadFromAssets("skills.json")
-        println("[SkillManager] 已加载 $loadedCount 个 Skills")
+        Log.d(TAG, " 已加载 $loadedCount 个 Skills")
     }
 
     /**
@@ -119,7 +122,7 @@ $skillsInfo
                 parseIntentResponse(response)
             }
         } catch (e: Exception) {
-            println("[SkillManager] LLM 意图匹配失败: ${e.message}")
+            Log.d(TAG, " LLM 意图匹配失败: ${e.message}")
             null
         }
     }
@@ -150,7 +153,7 @@ $skillsInfo
                 null
             }
         } catch (e: Exception) {
-            println("[SkillManager] 解析意图响应失败: ${e.message}")
+            Log.d(TAG, " 解析意图响应失败: ${e.message}")
             null
         }
     }
@@ -163,19 +166,19 @@ $skillsInfo
         val llmMatch = matchIntentWithLLM(query)
 
         if (llmMatch != null && llmMatch.confidence >= 0.5f) {
-            println("[SkillManager] LLM 匹配: ${llmMatch.skillId} (置信度: ${llmMatch.confidence})")
-            println("[SkillManager] 理由: ${llmMatch.reasoning}")
+            Log.d(TAG, " LLM 匹配: ${llmMatch.skillId} (置信度: ${llmMatch.confidence})")
+            Log.d(TAG, " 理由: ${llmMatch.reasoning}")
 
             // 获取对应的 Skill 和已安装应用
             val skill = registry.get(llmMatch.skillId)
             if (skill != null) {
-                println("[SkillManager] 找到 Skill: ${skill.config.name}")
-                println("[SkillManager] 关联应用: ${skill.config.relatedApps.map { "${it.name}(${it.packageName})" }}")
+                Log.d(TAG, " 找到 Skill: ${skill.config.name}")
+                Log.d(TAG, " 关联应用: ${skill.config.relatedApps.map { "${it.name}(${it.packageName})" }}")
 
                 // 检查每个应用的安装状态
                 for (app in skill.config.relatedApps) {
                     val installed = registry.isAppInstalled(app.packageName)
-                    println("[SkillManager] ${app.name}(${app.packageName}): ${if (installed) "已安装" else "未安装"}")
+                    Log.d(TAG, " ${app.name}(${app.packageName}): ${if (installed) "已安装" else "未安装"}")
                 }
 
                 val availableApp = skill.config.relatedApps
@@ -183,7 +186,7 @@ $skillsInfo
                     .maxByOrNull { it.priority }
 
                 if (availableApp != null) {
-                    println("[SkillManager] 选中应用: ${availableApp.name}")
+                    Log.d(TAG, " 选中应用: ${availableApp.name}")
                     val params = skill.extractParams(query)
                     return AvailableAppMatch(
                         skill = skill,
@@ -192,15 +195,15 @@ $skillsInfo
                         score = llmMatch.confidence
                     )
                 } else {
-                    println("[SkillManager] 没有可用应用（都未安装）")
+                    Log.d(TAG, " 没有可用应用（都未安装）")
                 }
             } else {
-                println("[SkillManager] 未找到 Skill: ${llmMatch.skillId}")
+                Log.d(TAG, " 未找到 Skill: ${llmMatch.skillId}")
             }
         }
 
         // 如果 LLM 匹配失败，回退到关键词匹配
-        println("[SkillManager] LLM 未匹配或无可用应用，回退到关键词匹配")
+        Log.d(TAG, " LLM 未匹配或无可用应用，回退到关键词匹配")
         return matchAvailableApp(query)
     }
 
@@ -267,7 +270,7 @@ $skillsInfo
         val app = match.app
         val params = match.params
 
-        println("[SkillManager] 执行: ${skill.config.name} -> ${app.name} (${app.type})")
+        Log.d(TAG, " 执行: ${skill.config.name} -> ${app.name} (${app.type})")
 
         return when (app.type) {
             ExecutionType.DELEGATION -> {
@@ -313,7 +316,7 @@ $skillsInfo
             )
         } catch (e: Exception) {
             // 如果指定包名失败，尝试不指定包名的方式
-            println("[SkillManager] 指定包名打开失败，尝试通用方式: ${e.message}")
+            Log.d(TAG, " 指定包名打开失败，尝试通用方式: ${e.message}")
             try {
                 val fallbackIntent = Intent(Intent.ACTION_VIEW, Uri.parse(deepLink)).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

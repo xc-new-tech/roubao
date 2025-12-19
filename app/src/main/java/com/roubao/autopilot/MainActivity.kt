@@ -742,7 +742,7 @@ class MainActivity : ComponentActivity() {
                     val steps = agentState?.executionSteps ?: emptyList()
                     val currentLogs = mobileAgent.value?.logs?.value ?: emptyList()
 
-                    println("[MainActivity] 取消任务 - steps: ${steps.size}, logs: ${currentLogs.size}")
+                    Log.d("MainActivity", "取消任务 - steps: ${steps.size}, logs: ${currentLogs.size}")
 
                     val updatedRecord = record.copy(
                         endTime = System.currentTimeMillis(),

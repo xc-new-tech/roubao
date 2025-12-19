@@ -1,6 +1,9 @@
 package com.roubao.autopilot.tools
 
+import android.util.Log
 import org.json.JSONObject
+
+private const val TAG = "ToolRegistry"
 
 /**
  * Tool 执行结果
@@ -106,7 +109,7 @@ object ToolRegistry {
 
     fun register(tool: Tool) {
         tools[tool.name] = tool
-        println("[ToolRegistry] 注册工具: ${tool.name}")
+        Log.d(TAG, "注册工具: ${tool.name}")
     }
 
     fun get(name: String): Tool? = tools[name]

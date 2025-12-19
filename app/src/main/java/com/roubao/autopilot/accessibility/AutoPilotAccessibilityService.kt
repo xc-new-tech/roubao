@@ -7,6 +7,7 @@ import android.content.Intent
 import android.graphics.Path
 import android.os.Bundle
 import android.provider.Settings
+import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
@@ -16,6 +17,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 class AutoPilotAccessibilityService : AccessibilityService() {
 
     companion object {
+        private const val TAG = "A11yService"
         private var instance: AutoPilotAccessibilityService? = null
 
         /** 获取服务实例 */
@@ -49,13 +51,13 @@ class AutoPilotAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        println("[A11yService] 无障碍服务已连接")
+        Log.d(TAG, " 无障碍服务已连接")
     }
 
     override fun onDestroy() {
         super.onDestroy()
         instance = null
-        println("[A11yService] 无障碍服务已断开")
+        Log.d(TAG, " 无障碍服务已断开")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -72,7 +74,7 @@ class AutoPilotAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() {
-        println("[A11yService] 服务中断")
+        Log.d(TAG, " 服务中断")
     }
 
     /** 设置界面变化监听器 */

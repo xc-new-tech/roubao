@@ -2,10 +2,13 @@ package com.roubao.autopilot.vlm
 
 import android.graphics.Bitmap
 import android.util.Base64
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import okhttp3.ConnectionPool
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -46,8 +49,10 @@ class VLMClient(
         .build()
 
     companion object {
+        private const val TAG = "VLMClient"
         private const val MAX_RETRIES = 3
         private const val RETRY_DELAY_MS = 1000L
+        private const val STREAM_TIMEOUT_MS = 180_000L  // 流式处理默认超时 3 分钟
 
         /** 规范化 URL：自动添加 https:// 前缀，移除末尾斜杠 */
         private fun normalizeUrl(url: String): String {
@@ -186,21 +191,21 @@ class VLMClient(
                 }
             } catch (e: UnknownHostException) {
                 // DNS 解析失败，重试
-                println("[VLMClient] DNS 解析失败，重试 $attempt/$MAX_RETRIES...")
+                Log.d(TAG, " DNS 解析失败，重试 $attempt/$MAX_RETRIES...")
                 lastException = e
                 if (attempt < MAX_RETRIES) {
                     delay(RETRY_DELAY_MS * attempt)
                 }
             } catch (e: java.net.SocketTimeoutException) {
                 // 超时，重试
-                println("[VLMClient] 请求超时，重试 $attempt/$MAX_RETRIES...")
+                Log.d(TAG, " 请求超时，重试 $attempt/$MAX_RETRIES...")
                 lastException = e
                 if (attempt < MAX_RETRIES) {
                     delay(RETRY_DELAY_MS * attempt)
                 }
             } catch (e: java.io.IOException) {
                 // IO 错误，重试
-                println("[VLMClient] IO 错误: ${e.message}，重试 $attempt/$MAX_RETRIES...")
+                Log.d(TAG, " IO 错误: ${e.message}，重试 $attempt/$MAX_RETRIES...")
                 lastException = e
                 if (attempt < MAX_RETRIES) {
                     delay(RETRY_DELAY_MS * attempt)
@@ -256,19 +261,19 @@ class VLMClient(
                     lastException = Exception("API error: ${response.code} - $responseBody")
                 }
             } catch (e: UnknownHostException) {
-                println("[VLMClient] DNS 解析失败，重试 $attempt/$MAX_RETRIES...")
+                Log.d(TAG, " DNS 解析失败，重试 $attempt/$MAX_RETRIES...")
                 lastException = e
                 if (attempt < MAX_RETRIES) {
                     delay(RETRY_DELAY_MS * attempt)
                 }
             } catch (e: java.net.SocketTimeoutException) {
-                println("[VLMClient] 请求超时，重试 $attempt/$MAX_RETRIES...")
+                Log.d(TAG, " 请求超时，重试 $attempt/$MAX_RETRIES...")
                 lastException = e
                 if (attempt < MAX_RETRIES) {
                     delay(RETRY_DELAY_MS * attempt)
                 }
             } catch (e: java.io.IOException) {
-                println("[VLMClient] IO 错误: ${e.message}，重试 $attempt/$MAX_RETRIES...")
+                Log.d(TAG, " IO 错误: ${e.message}，重试 $attempt/$MAX_RETRIES...")
                 lastException = e
                 if (attempt < MAX_RETRIES) {
                     delay(RETRY_DELAY_MS * attempt)
@@ -320,10 +325,12 @@ class VLMClient(
      * 流式调用 VLM (使用完整对话历史)
      * @param messagesJson OpenAI 兼容的 messages JSON 数组
      * @param callback 流式回调
+     * @param timeoutMs 超时时间（毫秒），默认 3 分钟
      */
     suspend fun predictWithContextStream(
         messagesJson: JSONArray,
-        callback: StreamCallback
+        callback: StreamCallback,
+        timeoutMs: Long = STREAM_TIMEOUT_MS
     ): Result<StreamResponse> = withContext(Dispatchers.IO) {
         val startTime = System.currentTimeMillis()
         var timeToFirstToken: Long? = null
@@ -338,155 +345,165 @@ class VLMClient(
         val actionMarkers = listOf("do(action=", "finish(message=")
 
         try {
-            val requestBody = JSONObject().apply {
-                put("model", model)
-                put("messages", messagesJson)
-                put("max_tokens", 4096)
-                put("temperature", 0.0)
-                put("top_p", 0.85)
-                put("frequency_penalty", 0.2)
-                put("stream", true)  // 启用流式输出
-            }
+            // 添加超时包装，防止流式读取无限阻塞
+            val streamResult = withTimeout(timeoutMs) {
+                val requestBody = JSONObject().apply {
+                    put("model", model)
+                    put("messages", messagesJson)
+                    put("max_tokens", 4096)
+                    put("temperature", 0.0)
+                    put("top_p", 0.85)
+                    put("frequency_penalty", 0.2)
+                    put("stream", true)  // 启用流式输出
+                }
 
-            val request = Request.Builder()
-                .url("$baseUrl/chat/completions")
-                .addHeader("Authorization", "Bearer $apiKey")
-                .addHeader("Content-Type", "application/json")
-                .addHeader("Accept", "text/event-stream")
-                .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
-                .build()
+                val request = Request.Builder()
+                    .url("$baseUrl/chat/completions")
+                    .addHeader("Authorization", "Bearer $apiKey")
+                    .addHeader("Content-Type", "application/json")
+                    .addHeader("Accept", "text/event-stream")
+                    .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
+                    .build()
 
-            val response = client.newCall(request).execute()
+                val response = client.newCall(request).execute()
 
-            if (!response.isSuccessful) {
-                val errorBody = response.body?.string() ?: ""
-                val error = Exception("API error: ${response.code} - $errorBody")
-                callback.onError(error)
-                return@withContext Result.failure(error)
-            }
+                if (!response.isSuccessful) {
+                    val errorBody = response.body?.string() ?: ""
+                    val error = Exception("API error: ${response.code} - $errorBody")
+                    callback.onError(error)
+                    return@withTimeout Result.failure<StreamResponse>(error)
+                }
 
-            val reader = response.body?.source()?.inputStream()?.bufferedReader()
-                ?: return@withContext Result.failure(Exception("Empty response body"))
+                val reader = response.body?.source()?.inputStream()?.bufferedReader()
+                    ?: return@withTimeout Result.failure<StreamResponse>(Exception("Empty response body"))
 
-            reader.useLines { lines ->
-                for (line in lines) {
-                    // 检查协程是否被取消
-                    if (!coroutineContext.isActive) {
-                        break
-                    }
-
-                    // SSE 格式: data: {...}
-                    if (!line.startsWith("data: ")) continue
-                    val data = line.removePrefix("data: ").trim()
-
-                    // 流结束标记
-                    if (data == "[DONE]") break
-
-                    try {
-                        val json = JSONObject(data)
-                        val choices = json.optJSONArray("choices") ?: continue
-                        if (choices.length() == 0) continue
-
-                        val delta = choices.getJSONObject(0).optJSONObject("delta") ?: continue
-                        val content = delta.optString("content", "")
-
-                        if (content.isEmpty()) continue
-
-                        // 记录首 token 时间
-                        if (timeToFirstToken == null) {
-                            timeToFirstToken = System.currentTimeMillis() - startTime
-                            callback.onFirstToken(timeToFirstToken!!)
+                reader.useLines { lines ->
+                    for (line in lines) {
+                        // 检查协程是否被取消
+                        if (!coroutineContext.isActive) {
+                            break
                         }
 
-                        rawContent.append(content)
+                        // SSE 格式: data: {...}
+                        if (!line.startsWith("data: ")) continue
+                        val data = line.removePrefix("data: ").trim()
 
-                        // 如果已经在动作阶段，直接累积
-                        if (inActionPhase) {
-                            actionContent.append(content)
-                            callback.onAction(content)
-                            continue
-                        }
+                        // 流结束标记
+                        if (data == "[DONE]") break
 
-                        // 否则检测是否进入动作阶段
-                        buffer.append(content)
+                        try {
+                            val json = JSONObject(data)
+                            val choices = json.optJSONArray("choices") ?: continue
+                            if (choices.length() == 0) continue
 
-                        // 检查是否包含动作标记
-                        var markerFound = false
-                        for (marker in actionMarkers) {
-                            if (buffer.contains(marker)) {
-                                // 找到标记，分离思考和动作
-                                val parts = buffer.toString().split(marker, limit = 2)
-                                val thinking = parts[0]
-                                val action = marker + (if (parts.size > 1) parts[1] else "")
+                            val delta = choices.getJSONObject(0).optJSONObject("delta") ?: continue
+                            val content = delta.optString("content", "")
 
-                                // 输出剩余的思考内容
-                                if (thinking.isNotEmpty()) {
-                                    thinkingContent.append(thinking)
-                                    callback.onThinking(thinking)
-                                }
+                            if (content.isEmpty()) continue
 
-                                // 进入动作阶段
-                                inActionPhase = true
-                                timeToAction = System.currentTimeMillis() - startTime
-                                callback.onActionStart()
-
-                                actionContent.append(action)
-                                callback.onAction(action)
-
-                                markerFound = true
-                                break
+                            // 记录首 token 时间
+                            if (timeToFirstToken == null) {
+                                timeToFirstToken = System.currentTimeMillis() - startTime
+                                callback.onFirstToken(timeToFirstToken!!)
                             }
-                        }
 
-                        if (markerFound) continue
+                            rawContent.append(content)
 
-                        // 检查 buffer 是否可能是标记的前缀
-                        var isPotentialMarker = false
-                        for (marker in actionMarkers) {
-                            for (i in 1 until marker.length) {
-                                if (buffer.endsWith(marker.substring(0, i))) {
-                                    isPotentialMarker = true
+                            // 如果已经在动作阶段，直接累积
+                            if (inActionPhase) {
+                                actionContent.append(content)
+                                callback.onAction(content)
+                                continue
+                            }
+
+                            // 否则检测是否进入动作阶段
+                            buffer.append(content)
+
+                            // 检查是否包含动作标记
+                            var markerFound = false
+                            for (marker in actionMarkers) {
+                                if (buffer.contains(marker)) {
+                                    // 找到标记，分离思考和动作
+                                    val parts = buffer.toString().split(marker, limit = 2)
+                                    val thinking = parts[0]
+                                    val action = marker + (if (parts.size > 1) parts[1] else "")
+
+                                    // 输出剩余的思考内容
+                                    if (thinking.isNotEmpty()) {
+                                        thinkingContent.append(thinking)
+                                        callback.onThinking(thinking)
+                                    }
+
+                                    // 进入动作阶段
+                                    inActionPhase = true
+                                    timeToAction = System.currentTimeMillis() - startTime
+                                    callback.onActionStart()
+
+                                    actionContent.append(action)
+                                    callback.onAction(action)
+
+                                    markerFound = true
                                     break
                                 }
                             }
-                            if (isPotentialMarker) break
-                        }
 
-                        // 如果不是潜在标记前缀，安全输出
-                        if (!isPotentialMarker) {
-                            val text = buffer.toString()
-                            thinkingContent.append(text)
-                            callback.onThinking(text)
-                            buffer.clear()
-                        }
+                            if (markerFound) continue
 
-                    } catch (e: Exception) {
-                        // JSON 解析错误，跳过这一行
-                        println("[VLMClient] Stream parse error: ${e.message}")
+                            // 检查 buffer 是否可能是标记的前缀
+                            var isPotentialMarker = false
+                            for (marker in actionMarkers) {
+                                for (i in 1 until marker.length) {
+                                    if (buffer.endsWith(marker.substring(0, i))) {
+                                        isPotentialMarker = true
+                                        break
+                                    }
+                                }
+                                if (isPotentialMarker) break
+                            }
+
+                            // 如果不是潜在标记前缀，安全输出
+                            if (!isPotentialMarker) {
+                                val text = buffer.toString()
+                                thinkingContent.append(text)
+                                callback.onThinking(text)
+                                buffer.clear()
+                            }
+
+                        } catch (e: Exception) {
+                            // JSON 解析错误，跳过这一行
+                            Log.d(TAG, " Stream parse error: ${e.message}")
+                        }
                     }
                 }
-            }
 
-            // 处理剩余的 buffer
-            if (buffer.isNotEmpty() && !inActionPhase) {
-                thinkingContent.append(buffer)
-                callback.onThinking(buffer.toString())
-            }
+                // 处理剩余的 buffer
+                if (buffer.isNotEmpty() && !inActionPhase) {
+                    thinkingContent.append(buffer)
+                    callback.onThinking(buffer.toString())
+                }
 
-            val totalTime = System.currentTimeMillis() - startTime
+                val totalTime = System.currentTimeMillis() - startTime
 
-            val streamResponse = StreamResponse(
-                thinking = thinkingContent.toString().trim(),
-                action = actionContent.toString().trim(),
-                rawContent = rawContent.toString(),
-                timeToFirstTokenMs = timeToFirstToken,
-                timeToActionMs = timeToAction,
-                totalTimeMs = totalTime
-            )
+                val streamResponse = StreamResponse(
+                    thinking = thinkingContent.toString().trim(),
+                    action = actionContent.toString().trim(),
+                    rawContent = rawContent.toString(),
+                    timeToFirstTokenMs = timeToFirstToken,
+                    timeToActionMs = timeToAction,
+                    totalTimeMs = totalTime
+                )
 
-            callback.onComplete(streamResponse)
-            Result.success(streamResponse)
+                callback.onComplete(streamResponse)
+                Result.success(streamResponse)
+            } // end withTimeout
 
+            streamResult
+
+        } catch (e: TimeoutCancellationException) {
+            val timeoutError = Exception("流式处理超时 (${timeoutMs / 1000}秒)")
+            Log.w(TAG, "流式处理超时: ${e.message}")
+            callback.onError(timeoutError)
+            Result.failure(timeoutError)
         } catch (e: Exception) {
             callback.onError(e)
             Result.failure(e)
@@ -527,7 +544,7 @@ class VLMClient(
         // 使用 JPEG 格式，质量 70%，保持原始分辨率
         bitmap.compress(Bitmap.CompressFormat.JPEG, 70, outputStream)
         val bytes = outputStream.toByteArray()
-        println("[VLMClient] 图片压缩: ${bitmap.width}x${bitmap.height}, ${bytes.size / 1024}KB")
+        Log.d(TAG, " 图片压缩: ${bitmap.width}x${bitmap.height}, ${bytes.size / 1024}KB")
         val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
         return "data:image/jpeg;base64,$base64"
     }

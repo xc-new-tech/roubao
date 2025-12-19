@@ -1,8 +1,11 @@
 package com.roubao.autopilot.tools
 
 import android.content.Context
+import android.util.Log
 import com.roubao.autopilot.controller.AppScanner
 import com.roubao.autopilot.controller.DeviceController
+
+private const val TAG = "ToolManager"
 
 /**
  * 工具管理器
@@ -50,7 +53,7 @@ class ToolManager private constructor(
         ToolRegistry.register(shellTool)
         ToolRegistry.register(httpTool)
 
-        println("[ToolManager] 已初始化 ${ToolRegistry.getAll().size} 个工具")
+        Log.d(TAG, "已初始化 ${ToolRegistry.getAll().size} 个工具")
     }
 
     /**

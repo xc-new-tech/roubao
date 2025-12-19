@@ -6,10 +6,10 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.ServiceConnection
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
 import com.roubao.autopilot.IShellService
 import com.roubao.autopilot.accessibility.AutoPilotAccessibilityService
@@ -30,6 +30,19 @@ import java.util.concurrent.TimeUnit
  */
 class DeviceController(private val context: Context? = null) {
 
+    companion object {
+        private const val TAG = "DeviceController"
+    }
+
+    // 委托给专门的管理器
+    private val gestureController: GestureController by lazy {
+        GestureController(::exec, ::getScreenSize)
+    }
+
+    private val screenshotManager: ScreenshotManager by lazy {
+        ScreenshotManager(::exec, ::getScreenSize)
+    }
+
     /** 执行方式 */
     enum class ExecutionMethod {
         A11Y,       // 使用 AccessibilityService
@@ -46,11 +59,6 @@ class DeviceController(private val context: Context? = null) {
 
     /** 检查无障碍服务是否可用 */
     fun isA11yAvailable(): Boolean = a11yService != null
-
-    companion object {
-        // 使用 /data/local/tmp，shell 用户有权限访问
-        private const val SCREENSHOT_PATH = "/data/local/tmp/autopilot_screen.png"
-    }
 
     private var shellService: IShellService? = null
     private var serviceBound = false
@@ -74,13 +82,13 @@ class DeviceController(private val context: Context? = null) {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             shellService = IShellService.Stub.asInterface(service)
             serviceBound = true
-            println("[DeviceController] ShellService connected")
+            Log.d(TAG, " ShellService connected")
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
             shellService = null
             serviceBound = false
-            println("[DeviceController] ShellService disconnected")
+            Log.d(TAG, " ShellService disconnected")
         }
     }
 
@@ -89,7 +97,7 @@ class DeviceController(private val context: Context? = null) {
      */
     fun bindService() {
         if (!isShizukuAvailable()) {
-            println("[DeviceController] Shizuku not available")
+            Log.d(TAG, " Shizuku not available")
             return
         }
         try {
@@ -147,7 +155,7 @@ class DeviceController(private val context: Context? = null) {
         }
         return try {
             val uid = Shizuku.getUid()
-            println("[DeviceController] Shizuku UID: $uid")
+            Log.d(TAG, " Shizuku UID: $uid")
             when (uid) {
                 0 -> ShizukuPrivilegeLevel.ROOT
                 else -> ShizukuPrivilegeLevel.ADB
@@ -178,7 +186,7 @@ class DeviceController(private val context: Context? = null) {
     /**
      * 执行 shell 命令 (通过 Shizuku)
      */
-    private fun exec(command: String): String {
+    fun exec(command: String): String {
         return try {
             shellService?.exec(command) ?: execLocal(command)
         } catch (e: Exception) {
@@ -196,14 +204,14 @@ class DeviceController(private val context: Context? = null) {
             val success = service.clickAt(x, y)
             if (success) {
                 lastExecutionMethod = ExecutionMethod.A11Y
-                println("[DeviceController] tap($x, $y) via A11y")
+                Log.d(TAG, " tap($x, $y) via A11y")
                 return
             }
         }
         // 降级使用 Shizuku
         lastExecutionMethod = ExecutionMethod.SHIZUKU
         exec("input tap $x $y")
-        println("[DeviceController] tap($x, $y) via Shizuku")
+        Log.d(TAG, " tap($x, $y) via Shizuku")
     }
 
     /**
@@ -215,7 +223,7 @@ class DeviceController(private val context: Context? = null) {
             val success = service.longPressAt(x, y, durationMs.toLong())
             if (success) {
                 lastExecutionMethod = ExecutionMethod.A11Y
-                println("[DeviceController] longPress($x, $y, $durationMs) via A11y")
+                Log.d(TAG, " longPress($x, $y, $durationMs) via A11y")
                 return
             }
         }
@@ -224,18 +232,18 @@ class DeviceController(private val context: Context? = null) {
     }
 
     /**
-     * 双击
+     * 双击 - suspend 函数，使用协程 delay 替代 Thread.sleep
      */
-    fun doubleTap(x: Int, y: Int) {
+    suspend fun doubleTap(x: Int, y: Int) {
         val service = a11yService
         if (service != null) {
             // A11y 双击：两次快速点击
             service.clickAt(x, y, 50)
-            Thread.sleep(50)
+            delay(50)  // 使用协程 delay 替代 Thread.sleep
             val success = service.clickAt(x, y, 50)
             if (success) {
                 lastExecutionMethod = ExecutionMethod.A11Y
-                println("[DeviceController] doubleTap($x, $y) via A11y")
+                Log.d(TAG, " doubleTap($x, $y) via A11y")
                 return
             }
         }
@@ -252,7 +260,7 @@ class DeviceController(private val context: Context? = null) {
             val success = service.swipe(x1, y1, x2, y2, durationMs.toLong())
             if (success) {
                 lastExecutionMethod = ExecutionMethod.A11Y
-                println("[DeviceController] swipe($x1,$y1 -> $x2,$y2) via A11y")
+                Log.d(TAG, " swipe($x1,$y1 -> $x2,$y2) via A11y")
                 return
             }
         }
@@ -273,7 +281,7 @@ class DeviceController(private val context: Context? = null) {
             lastExecutionMethod = ExecutionMethod.SHIZUKU
             val escaped = text.replace("'", "'\\''").replace("\"", "\\\"")
             exec("input text '$escaped'")
-            println("[DeviceController] type('$text') via input text")
+            Log.d(TAG, " type('$text') via input text")
             return
         }
 
@@ -284,7 +292,7 @@ class DeviceController(private val context: Context? = null) {
             var success = service.inputTextToFocused(text)
             if (success) {
                 lastExecutionMethod = ExecutionMethod.A11Y
-                println("[DeviceController] type('$text') via A11y (focused)")
+                Log.d(TAG, " type('$text') via A11y (focused)")
                 return
             }
 
@@ -295,86 +303,91 @@ class DeviceController(private val context: Context? = null) {
                 editableNode.recycle()
                 if (success) {
                     lastExecutionMethod = ExecutionMethod.A11Y
-                    println("[DeviceController] type('$text') via A11y (editable)")
+                    Log.d(TAG, " type('$text') via A11y (editable)")
                     return
                 }
             }
-            println("[DeviceController] A11y 输入失败，降级使用剪贴板")
+            Log.d(TAG, " A11y 输入失败，降级使用剪贴板")
         }
 
         // 降级使用剪贴板方式输入中文
         lastExecutionMethod = ExecutionMethod.SHIZUKU
         typeViaClipboard(text)
-        println("[DeviceController] type('$text') via clipboard")
+        Log.d(TAG, " type('$text') via clipboard")
     }
 
     /**
      * 通过剪贴板方式输入中文
      * 使用 Android ClipboardManager API 设置剪贴板，然后发送粘贴按键
+     * 使用 Handler.postDelayed 替代 Thread.sleep 实现非阻塞延迟
      */
     private fun typeViaClipboard(text: String) {
-        println("[DeviceController] 尝试输入中文: $text")
+        Log.d(TAG, " 尝试输入中文: $text")
 
         // 方法1: 使用 Android 剪贴板 API + 粘贴 (最可靠，不需要额外 App)
         if (clipboardManager != null) {
             try {
-                // 使用 CountDownLatch 等待剪贴板设置完成
-                val latch = CountDownLatch(1)
-                var clipboardSet = false
+                // 使用 CountDownLatch 等待整个操作完成（包含延迟）
+                val completionLatch = CountDownLatch(1)
+                var operationSuccess = false
 
                 // 必须在主线程操作剪贴板
                 mainHandler.post {
                     try {
                         val clip = ClipData.newPlainText("baozi_input", text)
                         clipboardManager?.setPrimaryClip(clip)
-                        clipboardSet = true
-                        println("[DeviceController] ✅ 已设置剪贴板: $text")
+                        Log.d(TAG, " ✅ 已设置剪贴板: $text")
+
+                        // 使用 Handler.postDelayed 替代 Thread.sleep
+                        // 延迟 200ms 后发送粘贴按键
+                        mainHandler.postDelayed({
+                            try {
+                                // 发送粘贴按键 (KEYCODE_PASTE = 279)
+                                exec("input keyevent 279")
+                                Log.d(TAG, " ✅ 已发送粘贴按键")
+                                operationSuccess = true
+                            } catch (e: Exception) {
+                                Log.d(TAG, " ❌ 发送粘贴按键失败: ${e.message}")
+                            } finally {
+                                completionLatch.countDown()
+                            }
+                        }, 200)
                     } catch (e: Exception) {
-                        println("[DeviceController] ❌ 设置剪贴板异常: ${e.message}")
-                    } finally {
-                        latch.countDown()
+                        Log.d(TAG, " ❌ 设置剪贴板异常: ${e.message}")
+                        completionLatch.countDown()
                     }
                 }
 
-                // 等待剪贴板设置完成 (最多等 1 秒)
-                val success = latch.await(1, TimeUnit.SECONDS)
+                // 等待整个操作完成 (最多等 2 秒，包含 200ms 延迟)
+                val success = completionLatch.await(2, TimeUnit.SECONDS)
                 if (!success) {
-                    println("[DeviceController] ❌ 等待剪贴板超时")
+                    Log.d(TAG, " ❌ 等待剪贴板操作超时")
                     return
                 }
 
-                if (!clipboardSet) {
-                    println("[DeviceController] ❌ 剪贴板设置失败")
+                if (operationSuccess) {
                     return
                 }
-
-                // 稍等一下确保剪贴板生效
-                Thread.sleep(200)
-
-                // 发送粘贴按键 (KEYCODE_PASTE = 279)
-                exec("input keyevent 279")
-                println("[DeviceController] ✅ 已发送粘贴按键")
-                return
             } catch (e: Exception) {
-                println("[DeviceController] ❌ 剪贴板方式失败: ${e.message}")
+                Log.d(TAG, " ❌ 剪贴板方式失败: ${e.message}")
                 e.printStackTrace()
             }
         } else {
-            println("[DeviceController] ❌ ClipboardManager 为 null，Context 未设置")
+            Log.d(TAG, " ❌ ClipboardManager 为 null，Context 未设置")
         }
 
         // 方法2: 使用 ADB Keyboard 广播 (备选，需要安装 ADBKeyboard)
         val escaped = text.replace("\"", "\\\"")
         val adbKeyboardResult = exec("am broadcast -a ADB_INPUT_TEXT --es msg \"$escaped\"")
-        println("[DeviceController] ADBKeyboard 广播结果: $adbKeyboardResult")
+        Log.d(TAG, " ADBKeyboard 广播结果: $adbKeyboardResult")
 
         if (adbKeyboardResult.contains("result=0")) {
-            println("[DeviceController] ✅ ADBKeyboard 输入成功")
+            Log.d(TAG, " ✅ ADBKeyboard 输入成功")
             return
         }
 
         // 方法3: 使用 cmd input text (Android 12+ 可能支持 UTF-8)
-        println("[DeviceController] 尝试 cmd input text...")
+        Log.d(TAG, " 尝试 cmd input text...")
         exec("cmd input text '$text'")
     }
 
@@ -408,7 +421,7 @@ class DeviceController(private val context: Context? = null) {
             val success = service.performBack()
             if (success) {
                 lastExecutionMethod = ExecutionMethod.A11Y
-                println("[DeviceController] back() via A11y")
+                Log.d(TAG, " back() via A11y")
                 return
             }
         }
@@ -419,7 +432,7 @@ class DeviceController(private val context: Context? = null) {
             backGesture()
         } else {
             exec("input keyevent 4")
-            println("[DeviceController] back() via keyevent")
+            Log.d(TAG, " back() via keyevent")
         }
     }
 
@@ -432,7 +445,7 @@ class DeviceController(private val context: Context? = null) {
             val success = service.performHome()
             if (success) {
                 lastExecutionMethod = ExecutionMethod.A11Y
-                println("[DeviceController] home() via A11y")
+                Log.d(TAG, " home() via A11y")
                 return
             }
         }
@@ -443,7 +456,7 @@ class DeviceController(private val context: Context? = null) {
             homeGesture()
         } else {
             exec("input keyevent 3")
-            println("[DeviceController] home() via keyevent")
+            Log.d(TAG, " home() via keyevent")
         }
     }
 
@@ -456,7 +469,7 @@ class DeviceController(private val context: Context? = null) {
             val success = service.performRecents()
             if (success) {
                 lastExecutionMethod = ExecutionMethod.A11Y
-                println("[DeviceController] recents() via A11y")
+                Log.d(TAG, " recents() via A11y")
                 return
             }
         }
@@ -467,48 +480,18 @@ class DeviceController(private val context: Context? = null) {
             recentsGesture()
         } else {
             exec("input keyevent 187")  // KEYCODE_APP_SWITCH
-            println("[DeviceController] recents() via keyevent")
+            Log.d(TAG, " recents() via keyevent")
         }
     }
 
-    /**
-     * Home 手势 - 从底部中间往上快速滑动
-     */
-    private fun homeGesture() {
-        val (width, height) = getScreenSize()
-        val startX = width / 2
-        val startY = height - 50  // 底部白条位置
-        val endX = width / 2
-        val endY = height / 2     // 滑到屏幕中间
-        exec("input swipe $startX $startY $endX $endY 150")  // 150ms 快速滑动
-        println("[DeviceController] home() via gesture ($startX,$startY -> $endX,$endY)")
-    }
+    /** Home 手势 - 委托给 GestureController */
+    private fun homeGesture() = gestureController.homeGesture()
 
-    /**
-     * Back 手势 - 从左侧边缘往右滑动
-     */
-    private fun backGesture() {
-        val (_, height) = getScreenSize()
-        val startX = 10           // 左侧边缘
-        val startY = height / 2   // 屏幕中间高度
-        val endX = 300            // 往右滑动
-        val endY = height / 2
-        exec("input swipe $startX $startY $endX $endY 150")  // 150ms
-        println("[DeviceController] back() via gesture ($startX,$startY -> $endX,$endY)")
-    }
+    /** Back 手势 - 委托给 GestureController */
+    private fun backGesture() = gestureController.backGesture()
 
-    /**
-     * 最近任务手势 - 从底部往上滑动并停顿
-     */
-    private fun recentsGesture() {
-        val (width, height) = getScreenSize()
-        val startX = width / 2
-        val startY = height - 50
-        val endX = width / 2
-        val endY = height / 3     // 滑到屏幕上方 1/3 处
-        exec("input swipe $startX $startY $endX $endY 500")  // 500ms 慢速滑动
-        println("[DeviceController] recents() via gesture ($startX,$startY -> $endX,$endY)")
-    }
+    /** 最近任务手势 - 委托给 GestureController */
+    private fun recentsGesture() = gestureController.recentsGesture()
 
     /**
      * 回车键
@@ -523,112 +506,25 @@ class DeviceController(private val context: Context? = null) {
         cacheDir = dir
     }
 
-    /**
-     * 截图结果
-     */
-    data class ScreenshotResult(
-        val bitmap: Bitmap,
-        val isSensitive: Boolean = false,  // 是否是敏感页面（截图失败）
-        val isFallback: Boolean = false    // 是否是降级的黑屏占位图
-    )
+    /** 截图结果类型别名，委托给 ScreenshotManager */
+    @Suppress("unused")
+    val ScreenshotResult = ScreenshotManager.ScreenshotResult::class
 
     /**
-     * 截图 - 使用 /data/local/tmp 并设置全局可读权限
+     * 截图 - 委托给 ScreenshotManager
      * 失败时返回黑屏占位图（降级处理）
      */
-    suspend fun screenshotWithFallback(): ScreenshotResult = withContext(Dispatchers.IO) {
-        try {
-            // 截图到 /data/local/tmp 并设置权限让 App 可读
-            val output = exec("screencap -p $SCREENSHOT_PATH && chmod 666 $SCREENSHOT_PATH")
-            delay(500)
-
-            // 检查是否截图失败（敏感页面保护）
-            if (output.contains("Status: -1") || output.contains("Failed") || output.contains("error")) {
-                println("[DeviceController] Screenshot blocked (sensitive screen), returning fallback")
-                return@withContext createFallbackScreenshot(isSensitive = true)
-            }
-
-            // 尝试直接读取
-            val file = File(SCREENSHOT_PATH)
-            if (file.exists() && file.canRead() && file.length() > 0) {
-                println("[DeviceController] Reading screenshot from: $SCREENSHOT_PATH, size: ${file.length()}")
-                val bitmap = BitmapFactory.decodeFile(SCREENSHOT_PATH)
-                if (bitmap != null) {
-                    return@withContext ScreenshotResult(bitmap)
-                }
-            }
-
-            // 如果无法直接读取，通过 shell cat 读取二进制数据
-            println("[DeviceController] Cannot read directly, trying shell cat...")
-            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "cat $SCREENSHOT_PATH"))
-            val bytes = process.inputStream.readBytes()
-            process.waitFor()
-
-            if (bytes.isNotEmpty()) {
-                println("[DeviceController] Read ${bytes.size} bytes via shell")
-                val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                if (bitmap != null) {
-                    return@withContext ScreenshotResult(bitmap)
-                }
-            }
-
-            println("[DeviceController] Screenshot file empty or not accessible, returning fallback")
-            createFallbackScreenshot(isSensitive = false)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            println("[DeviceController] Screenshot exception, returning fallback")
-            createFallbackScreenshot(isSensitive = false)
-        }
+    suspend fun screenshotWithFallback(): ScreenshotManager.ScreenshotResult {
+        return screenshotManager.screenshotWithFallback()
     }
 
     /**
-     * 创建黑屏占位图（降级处理）
-     */
-    private fun createFallbackScreenshot(isSensitive: Boolean): ScreenshotResult {
-        val (width, height) = getScreenSize()
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        // 默认是黑色，无需填充
-        return ScreenshotResult(
-            bitmap = bitmap,
-            isSensitive = isSensitive,
-            isFallback = true
-        )
-    }
-
-    /**
-     * 截图 - 使用 /data/local/tmp 并设置全局可读权限
+     * 截图 - 委托给 ScreenshotManager
      * @deprecated 使用 screenshotWithFallback() 代替
      */
-    suspend fun screenshot(): Bitmap? = withContext(Dispatchers.IO) {
-        try {
-            // 截图到 /data/local/tmp 并设置权限让 App 可读
-            exec("screencap -p $SCREENSHOT_PATH && chmod 666 $SCREENSHOT_PATH")
-            delay(500)
-
-            // 尝试直接读取
-            val file = File(SCREENSHOT_PATH)
-            if (file.exists() && file.canRead() && file.length() > 0) {
-                println("[DeviceController] Reading screenshot from: $SCREENSHOT_PATH, size: ${file.length()}")
-                return@withContext BitmapFactory.decodeFile(SCREENSHOT_PATH)
-            }
-
-            // 如果无法直接读取，通过 shell cat 读取二进制数据
-            println("[DeviceController] Cannot read directly, trying shell cat...")
-            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "cat $SCREENSHOT_PATH"))
-            val bytes = process.inputStream.readBytes()
-            process.waitFor()
-
-            if (bytes.isNotEmpty()) {
-                println("[DeviceController] Read ${bytes.size} bytes via shell")
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            } else {
-                println("[DeviceController] Screenshot file empty or not accessible")
-                null
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            null
-        }
+    @Suppress("DEPRECATION")
+    suspend fun screenshot(): Bitmap? {
+        return screenshotManager.screenshot()
     }
 
     /**
@@ -717,11 +613,11 @@ class DeviceController(private val context: Context? = null) {
         if (lowerName == "浏览器" || lowerName == "browser" || lowerName == "默认浏览器") {
             for (browserPkg in browserPackages) {
                 if (launchAppByPackage(browserPkg)) {
-                    println("[DeviceController] ✅ 浏览器启动成功: $browserPkg")
+                    Log.d(TAG, " ✅ 浏览器启动成功: $browserPkg")
                     return
                 }
             }
-            println("[DeviceController] ❌ 所有浏览器包名都启动失败")
+            Log.d(TAG, " ❌ 所有浏览器包名都启动失败")
             return
         }
 
@@ -735,9 +631,9 @@ class DeviceController(private val context: Context? = null) {
 
         // 启动应用
         if (launchAppByPackage(finalPackage)) {
-            println("[DeviceController] ✅ openApp 成功: $packageName -> $finalPackage")
+            Log.d(TAG, " ✅ openApp 成功: $packageName -> $finalPackage")
         } else {
-            println("[DeviceController] ❌ openApp 失败: $packageName -> $finalPackage")
+            Log.d(TAG, " ❌ openApp 失败: $packageName -> $finalPackage")
         }
     }
 
@@ -754,7 +650,7 @@ class DeviceController(private val context: Context? = null) {
 
         if (launcherActivity.isNotEmpty() && launcherActivity.contains("/")) {
             val amResult = exec("am start -n $launcherActivity")
-            println("[DeviceController] am start -n $launcherActivity, result: $amResult")
+            Log.d(TAG, " am start -n $launcherActivity, result: $amResult")
             if (!amResult.contains("Error") && !amResult.contains("Exception")) {
                 return true
             }
@@ -762,14 +658,14 @@ class DeviceController(private val context: Context? = null) {
 
         // 方法2: 使用 am start 配合 category.LAUNCHER
         val amLauncherResult = exec("am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p $packageName")
-        println("[DeviceController] am start launcher: $packageName, result: $amLauncherResult")
+        Log.d(TAG, " am start launcher: $packageName, result: $amLauncherResult")
         if (!amLauncherResult.contains("Error") && !amLauncherResult.contains("Exception") && amLauncherResult.contains("Starting")) {
             return true
         }
 
         // 方法3: 使用 monkey 命令作为备选
         val monkeyResult = exec("monkey -p $packageName -c android.intent.category.LAUNCHER 1 2>/dev/null")
-        println("[DeviceController] monkey: $packageName, result: $monkeyResult")
+        Log.d(TAG, " monkey: $packageName, result: $monkeyResult")
         if (monkeyResult.contains("Events injected: 1")) {
             return true
         }
@@ -808,7 +704,7 @@ class DeviceController(private val context: Context? = null) {
         val node = service.findClickableByText(text) ?: return false
         val success = service.clickNode(node)
         node.recycle()
-        println("[DeviceController] clickByText('$text') = $success")
+        Log.d(TAG, " clickByText('$text') = $success")
         return success
     }
 
@@ -823,7 +719,7 @@ class DeviceController(private val context: Context? = null) {
             if (node.isEditable) {
                 val success = service.inputText(node, inputText)
                 node.recycle()
-                println("[DeviceController] typeToFieldByText('$fieldText', '$inputText') = $success")
+                Log.d(TAG, " typeToFieldByText('$fieldText', '$inputText') = $success")
                 return success
             }
             node.recycle()
@@ -846,7 +742,7 @@ class DeviceController(private val context: Context? = null) {
         val node = service.findEditableNode() ?: return false
         val success = service.inputText(node, text)
         node.recycle()
-        println("[DeviceController] typeToFirstEditable('$text') = $success")
+        Log.d(TAG, " typeToFirstEditable('$text') = $success")
         return success
     }
 }

@@ -1,5 +1,6 @@
 package com.roubao.autopilot.vlm
 
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -32,6 +33,7 @@ class PlanningClient(
         .build()
 
     companion object {
+        private const val TAG = "PlanningClient"
         private const val MAX_RETRIES = 3
         private const val RETRY_DELAY_MS = 1000L
 
@@ -284,7 +286,7 @@ $optionsStr
                     lastException = Exception("API error: ${response.code} - $responseBody")
                 }
             } catch (e: Exception) {
-                println("[PlanningClient] 请求失败 ($attempt/$MAX_RETRIES): ${e.message}")
+                Log.w(TAG, " 请求失败 ($attempt/$MAX_RETRIES): ${e.message}")
                 lastException = e
                 if (attempt < MAX_RETRIES) {
                     delay(RETRY_DELAY_MS * attempt)

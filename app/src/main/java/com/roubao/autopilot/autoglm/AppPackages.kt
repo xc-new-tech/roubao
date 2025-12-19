@@ -1,7 +1,10 @@
 package com.roubao.autopilot.autoglm
 
 import android.content.Context
+import android.util.Log
 import org.json.JSONObject
+
+private const val TAG = "AppPackages"
 
 /**
  * 应用包名映射管理器
@@ -108,11 +111,10 @@ class AppPackages private constructor(context: Context) {
                 categories[category] = categoryMap
             }
 
-            println("[AppPackages] 已加载 ${appToPackage.size} 个应用映射, ${categories.size} 个分类")
+            Log.d(TAG, "已加载 ${appToPackage.size} 个应用映射, ${categories.size} 个分类")
 
         } catch (e: Exception) {
-            e.printStackTrace()
-            println("[AppPackages] 加载 JSON 失败，使用内置映射")
+            Log.w(TAG, "加载 JSON 失败，使用内置映射", e)
             // 使用内置映射作为备选
             BUILTIN_PACKAGES.forEach { (name, pkg) ->
                 appToPackage[name] = pkg
