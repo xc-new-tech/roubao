@@ -72,7 +72,12 @@ fun SettingsScreen(
     onUpdatePlanningEnabled: (Boolean) -> Unit = {},
     onUpdatePlanningBaseUrl: (String) -> Unit = {},
     onUpdatePlanningApiKey: (String) -> Unit = {},
-    onUpdatePlanningModel: (String) -> Unit = {}
+    onUpdatePlanningModel: (String) -> Unit = {},
+    // MCP 服务回调
+    onUpdateMCPServerEnabled: (Boolean) -> Unit = {},
+    mcpServerRunning: Boolean = false,
+    // 小窗模式回调
+    onUpdateFreeformModeEnabled: (Boolean) -> Unit = {}
 ) {
     val colors = BaoziTheme.colors
     var showApiKeyDialog by remember { mutableStateOf(false) }
@@ -776,6 +781,193 @@ fun SettingsScreen(
                         }
                     }
                 )
+            }
+        }
+
+        // 开发者分组
+        item {
+            SettingsSection(title = "开发者")
+        }
+
+        item {
+            val context = LocalContext.current
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = colors.backgroundCard)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(colors.primary.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Build,
+                            contentDescription = null,
+                            tint = colors.primary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "MCP 服务",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = colors.textPrimary
+                        )
+                        Text(
+                            text = if (settings.mcpServerEnabled) {
+                                if (mcpServerRunning) "运行中 · 端口 ${settings.mcpServerPort}"
+                                else "已启用 · 未运行"
+                            } else "为外部应用提供自动化接口",
+                            fontSize = 13.sp,
+                            color = if (mcpServerRunning) colors.success else colors.textSecondary,
+                            maxLines = 1
+                        )
+                    }
+                    Switch(
+                        checked = settings.mcpServerEnabled,
+                        onCheckedChange = { onUpdateMCPServerEnabled(it) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = colors.primary,
+                            checkedTrackColor = colors.primary.copy(alpha = 0.5f),
+                            uncheckedThumbColor = colors.textHint,
+                            uncheckedTrackColor = colors.backgroundInput
+                        )
+                    )
+                }
+            }
+
+            // MCP 使用说明
+            if (settings.mcpServerEnabled) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .padding(top = 4.dp, bottom = 6.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = colors.backgroundInput)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = "MCP 接口地址",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = colors.textSecondary
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "http://localhost:${settings.mcpServerPort}/mcp",
+                            fontSize = 13.sp,
+                            color = colors.primary
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "可用工具: execute_instruction, play_script, list_scripts, get_status, stop_execution",
+                            fontSize = 11.sp,
+                            color = colors.textHint
+                        )
+                    }
+                }
+            }
+        }
+
+        // 小窗模式设置
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = colors.backgroundCard)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .background(colors.primary.copy(alpha = 0.1f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = null,
+                            tint = colors.primary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "小窗执行模式",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = colors.textPrimary
+                        )
+                        Text(
+                            text = if (settings.freeformModeEnabled) "已启用 · 任务将在小窗中执行"
+                                   else "在小窗中执行任务，不影响前台操作",
+                            fontSize = 13.sp,
+                            color = colors.textSecondary,
+                            maxLines = 1
+                        )
+                    }
+                    Switch(
+                        checked = settings.freeformModeEnabled,
+                        onCheckedChange = { onUpdateFreeformModeEnabled(it) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = colors.primary,
+                            checkedTrackColor = colors.primary.copy(alpha = 0.5f),
+                            uncheckedThumbColor = colors.textHint,
+                            uncheckedTrackColor = colors.backgroundInput
+                        )
+                    )
+                }
+            }
+        }
+
+        // 小窗模式说明
+        if (settings.freeformModeEnabled) {
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .padding(top = 4.dp, bottom = 6.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = colors.backgroundInput)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = "小窗模式说明",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = colors.textSecondary
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "• 任务将在悬浮小窗中执行\n• 你可以同时操作其他应用\n• 任务完成后小窗自动关闭",
+                            fontSize = 12.sp,
+                            color = colors.textHint,
+                            lineHeight = 18.sp
+                        )
+                    }
+                }
             }
         }
 

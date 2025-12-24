@@ -28,10 +28,12 @@ import android.net.Uri
 import android.provider.Settings
 import com.roubao.autopilot.agent.MobileAgent
 import com.roubao.autopilot.autoglm.ActionParser
+import com.roubao.autopilot.autoglm.AppPackages
 import com.roubao.autopilot.autoglm.AutoGLMAgent
 import com.roubao.autopilot.controller.AppScanner
 import com.roubao.autopilot.controller.DeviceController
 import com.roubao.autopilot.data.*
+import com.roubao.autopilot.mcp.MCPServer
 import com.roubao.autopilot.script.ScriptConverter
 import com.roubao.autopilot.script.ScriptPlayer
 import com.roubao.autopilot.ui.OverlayService
@@ -89,6 +91,13 @@ class MainActivity : ComponentActivity() {
     // 执行完成报告（用于显示汇总）
     private val executionReport = mutableStateOf<ExecutionReport?>(null)
 
+    // MCP Server
+    private var mcpServer: MCPServer? = null
+    private val mcpServerRunning = mutableStateOf(false)
+
+    // 当前小窗执行的包名 (用于停止时关闭小窗)
+    private var currentFreeformPackage: String? = null
+
     private val binderReceivedListener = Shizuku.OnBinderReceivedListener {
         Log.d(TAG, "Shizuku binder received")
         shizukuAvailable.value = true
@@ -137,6 +146,11 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             executionRecords.value = executionRepository.getAllRecords()
             scripts.value = scriptRepository.getAllScripts()
+        }
+
+        // 如果 MCP Server 之前是启用的，自动启动
+        if (settingsManager.settings.value.mcpServerEnabled) {
+            startMCPServer()
         }
 
         // 添加 Shizuku 监听器
@@ -394,7 +408,21 @@ class MainActivity : ComponentActivity() {
                                 onUpdatePlanningEnabled = { settingsManager.updatePlanningEnabled(it) },
                                 onUpdatePlanningBaseUrl = { settingsManager.updatePlanningBaseUrl(it) },
                                 onUpdatePlanningApiKey = { settingsManager.updatePlanningApiKey(it) },
-                                onUpdatePlanningModel = { settingsManager.updatePlanningModel(it) }
+                                onUpdatePlanningModel = { settingsManager.updatePlanningModel(it) },
+                                // MCP 服务回调
+                                onUpdateMCPServerEnabled = { enabled ->
+                                    settingsManager.updateMCPServerEnabled(enabled)
+                                    if (enabled) {
+                                        startMCPServer()
+                                    } else {
+                                        stopMCPServer()
+                                    }
+                                },
+                                mcpServerRunning = mcpServerRunning.value,
+                                // 小窗模式回调
+                                onUpdateFreeformModeEnabled = { enabled ->
+                                    settingsManager.updateFreeformModeEnabled(enabled)
+                                }
                             )
                         }
                     }
@@ -672,10 +700,89 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         scriptPlayer.release()
+        stopMCPServer()
         Shizuku.removeBinderReceivedListener(binderReceivedListener)
         Shizuku.removeBinderDeadListener(binderDeadListener)
         Shizuku.removeRequestPermissionResultListener(permissionResultListener)
         deviceController.unbindService()
+    }
+
+    /**
+     * 启动 MCP Server
+     */
+    private fun startMCPServer() {
+        if (mcpServer != null) return
+
+        val port = settingsManager.settings.value.mcpServerPort
+        mcpServer = MCPServer(this, port).apply {
+            // 配置回调
+            onExecuteInstruction = { instruction ->
+                lifecycleScope.launch(Dispatchers.Main) {
+                    val settings = settingsManager.settings.value
+                    runAgent(instruction, settings.apiKey, settings.baseUrl, settings.model, settings.maxSteps)
+                }
+            }
+
+            onPlayScript = { scriptId, params ->
+                lifecycleScope.launch(Dispatchers.Main) {
+                    val script = scripts.value.find { it.id == scriptId }
+                    if (script != null) {
+                        playScript(script, params)
+                    } else {
+                        Log.w(TAG, "Script not found: $scriptId")
+                    }
+                }
+            }
+
+            onStopExecution = {
+                lifecycleScope.launch(Dispatchers.Main) {
+                    currentExecutionJob?.cancel()
+                    mobileAgent.value?.stop()
+                    scriptPlayer.stop()
+                }
+            }
+
+            getScripts = {
+                scripts.value.map { script ->
+                    MCPServer.ScriptInfo(
+                        id = script.id,
+                        name = script.name,
+                        description = script.description,
+                        actionCount = script.actions.size
+                    )
+                }
+            }
+
+            getExecutionStatus = {
+                MCPServer.ExecutionStatusInfo(
+                    isRunning = isExecuting.value,
+                    currentTask = currentRecordId.value?.let { id ->
+                        executionRecords.value.find { it.id == id }?.instruction
+                    },
+                    progress = null,
+                    message = null
+                )
+            }
+        }
+
+        if (mcpServer?.startServer() == true) {
+            mcpServerRunning.value = true
+            Log.i(TAG, "MCP Server started on port $port")
+        } else {
+            mcpServer = null
+            mcpServerRunning.value = false
+            Log.e(TAG, "Failed to start MCP Server")
+        }
+    }
+
+    /**
+     * 停止 MCP Server
+     */
+    private fun stopMCPServer() {
+        mcpServer?.stopServer()
+        mcpServer = null
+        mcpServerRunning.value = false
+        Log.i(TAG, "MCP Server stopped")
     }
 
     private fun checkShizukuPermission(): Boolean {
@@ -853,6 +960,19 @@ class MainActivity : ComponentActivity() {
             agentLogs.add("📋 规划模型已启用: ${planningConfig.model}")
         }
 
+        // 小窗模式配置
+        val freeformEnabled = settingsManager.settings.value.freeformModeEnabled
+        if (freeformEnabled) {
+            agentLogs.add("🪟 小窗模式已启用")
+            // 从指令中提取目标应用包名，用于停止时关闭小窗
+            currentFreeformPackage = extractAppPackageFromInstruction(instruction)
+            if (currentFreeformPackage != null) {
+                agentLogs.add("🎯 目标应用: $currentFreeformPackage")
+            }
+        } else {
+            currentFreeformPackage = null
+        }
+
         val agent = AutoGLMAgent(
             visionClient = vlmClient,
             deviceController = deviceController,
@@ -861,7 +981,9 @@ class MainActivity : ComponentActivity() {
             config = AutoGLMAgent.AgentConfig(
                 maxSteps = maxSteps,
                 useStreaming = true,
-                usePlanning = planningClient != null
+                usePlanning = planningClient != null,
+                freeformMode = freeformEnabled
+                // freeformPackage 将由 Agent 从指令中自动解析
             )
         )
 
@@ -980,6 +1102,9 @@ class MainActivity : ComponentActivity() {
                     executionRepository.saveRecord(updatedRecord)
                     executionRecords.value = executionRepository.getAllRecords()
 
+                    // 确保关闭小窗 (Agent 的 finally 块应该已经处理，这里是额外保险)
+                    closeFreeformWindowIfNeeded()
+
                     isExecuting.value = false
                     Toast.makeText(this@MainActivity, "任务已停止", Toast.LENGTH_SHORT).show()
                     OverlayService.hide(this@MainActivity)
@@ -995,9 +1120,15 @@ class MainActivity : ComponentActivity() {
                 executionRepository.saveRecord(updatedRecord)
                 executionRecords.value = executionRepository.getAllRecords()
 
+                // 确保关闭小窗
+                closeFreeformWindowIfNeeded()
+
                 isExecuting.value = false
                 Toast.makeText(this@MainActivity, "错误: ${e.message}", Toast.LENGTH_LONG).show()
                 OverlayService.hide(this@MainActivity)
+            } finally {
+                // 清理小窗状态
+                currentFreeformPackage = null
             }
         }
     }
@@ -1105,6 +1236,53 @@ class MainActivity : ComponentActivity() {
                 kotlinx.coroutines.delay(3000)
                 mobileAgent.value?.clearLogs()
             }
+        }
+    }
+
+    /**
+     * 从指令中提取目标应用的包名
+     */
+    private fun extractAppPackageFromInstruction(instruction: String): String? {
+        val packages = AppPackages.getInstance(this)
+        val appNames = packages.listSupportedApps().sortedByDescending { it.length }
+
+        for (appName in appNames) {
+            if (instruction.contains(appName, ignoreCase = true)) {
+                return packages.getPackageName(appName)
+            }
+        }
+
+        // 尝试匹配常见的打开应用模式
+        val patterns = listOf(
+            Regex("打开(.+?)(?:app|应用|APP)?(?:点|搜|看|发|$)"),
+            Regex("在(.+?)(?:上|里|中)"),
+            Regex("用(.+?)(?:点|搜|看|发)")
+        )
+
+        for (pattern in patterns) {
+            val match = pattern.find(instruction)
+            if (match != null) {
+                val appName = match.groupValues[1].trim()
+                val packageName = packages.getPackageName(appName)
+                if (packageName != null) {
+                    return packageName
+                }
+            }
+        }
+
+        return null
+    }
+
+    /**
+     * 关闭小窗 (如果需要)
+     */
+    private suspend fun closeFreeformWindowIfNeeded() {
+        val packageName = currentFreeformPackage ?: return
+        try {
+            Log.d(TAG, "关闭小窗: $packageName")
+            deviceController.freeformManager.closeFreeformWindow(packageName)
+        } catch (e: Exception) {
+            Log.w(TAG, "关闭小窗失败", e)
         }
     }
 

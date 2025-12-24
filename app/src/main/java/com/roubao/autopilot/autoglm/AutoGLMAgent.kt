@@ -13,6 +13,7 @@ import com.roubao.autopilot.vlm.PlanningClient
 import com.roubao.autopilot.vlm.VLMClient
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
@@ -76,7 +77,11 @@ class AutoGLMAgent(
         val systemPrompt: String? = null,          // 自定义系统提示词
         val useStreaming: Boolean = true,          // 是否使用流式输出
         val usePlanning: Boolean = true,           // 是否使用规划模型 (需要 planningClient)
-        val verifyInterval: Int = 5                // 每隔多少步进行验证 (0=不验证)
+        val verifyInterval: Int = 5,               // 每隔多少步进行验证 (0=不验证)
+        // 小窗模式配置
+        val freeformMode: Boolean = false,         // 是否使用小窗模式执行
+        val freeformPackage: String? = null,       // 小窗中运行的目标应用包名
+        val freeformActivity: String? = null       // 小窗中运行的目标 Activity (可选)
     )
 
     /**
@@ -144,6 +149,9 @@ class AutoGLMAgent(
     private val recentActions = mutableListOf<String>()  // 最近的操作记录
     private var currentTask: String = ""
 
+    // 小窗模式相关
+    private var freeformBounds: android.graphics.Rect? = null
+
     /**
      * 运行 Agent 完成任务
      * @param task 用户任务描述
@@ -160,8 +168,47 @@ class AutoGLMAgent(
         taskPlan = null
         recentActions.clear()
         currentTask = task
+        freeformBounds = null
+
+        // 小窗模式的目标包名
+        var freeformTargetPackage: String? = config.freeformPackage
 
         try {
+            // === 小窗模式初始化 ===
+            if (config.freeformMode) {
+                // 如果没有指定包名，尝试从任务指令中提取
+                if (freeformTargetPackage == null) {
+                    freeformTargetPackage = extractAppPackageFromTask(task)
+                    if (config.verbose && freeformTargetPackage != null) {
+                        Log.d(TAG, "从指令中识别到应用: $freeformTargetPackage")
+                    }
+                }
+
+                if (freeformTargetPackage != null) {
+                    if (config.verbose) {
+                        Log.d(TAG, "启动小窗模式: $freeformTargetPackage")
+                    }
+                    val freeformManager = deviceController.freeformManager
+                    val launched = freeformManager.launchInFreeform(
+                        freeformTargetPackage,
+                        config.freeformActivity
+                    )
+                    if (launched) {
+                        delay(1000) // 等待小窗启动
+                        freeformBounds = freeformManager.getFreeformBounds(freeformTargetPackage)
+                        if (config.verbose) {
+                            Log.d(TAG, "小窗边界: $freeformBounds")
+                        }
+                    } else {
+                        Log.w(TAG, "小窗启动失败，回退到普通模式")
+                        freeformTargetPackage = null
+                    }
+                } else {
+                    if (config.verbose) {
+                        Log.d(TAG, "未识别到目标应用，使用普通模式执行")
+                    }
+                }
+            }
             // === 规划阶段 (如果有 planningClient) ===
             if (planningClient != null && config.usePlanning) {
                 if (config.verbose) {
@@ -235,7 +282,65 @@ class AutoGLMAgent(
                 message = "执行出错: ${e.message}",
                 stepCount = stepCount
             )
+        } finally {
+            // === 小窗模式清理 ===
+            // 使用 NonCancellable 确保即使协程被取消也能关闭小窗
+            if (config.freeformMode && freeformTargetPackage != null) {
+                withContext(NonCancellable) {
+                    try {
+                        if (config.verbose) {
+                            Log.d(TAG, "关闭小窗: $freeformTargetPackage")
+                        }
+                        deviceController.freeformManager.closeFreeformWindow(freeformTargetPackage)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "关闭小窗失败", e)
+                    }
+                }
+                freeformBounds = null
+            }
         }
+    }
+
+    /**
+     * 从任务指令中提取目标应用的包名
+     * 例如: "打开美团点外卖" -> "com.sankuai.meituan"
+     */
+    private fun extractAppPackageFromTask(task: String): String? {
+        val packages = appPackages ?: return null
+
+        // 获取所有已知应用名，按长度降序排列（优先匹配长名称）
+        val appNames = packages.listSupportedApps().sortedByDescending { it.length }
+
+        // 在任务指令中查找应用名
+        for (appName in appNames) {
+            if (task.contains(appName, ignoreCase = true)) {
+                val packageName = packages.getPackageName(appName)
+                if (packageName != null) {
+                    Log.d(TAG, "从指令中提取应用: $appName -> $packageName")
+                    return packageName
+                }
+            }
+        }
+
+        // 尝试一些常见的模式匹配
+        val patterns = listOf(
+            Regex("(?:打开|启动|使用|去|在)\\s*([\\u4e00-\\u9fa5a-zA-Z0-9]+)"),
+            Regex("(?:on|in|using|open)\\s+(\\w+)", RegexOption.IGNORE_CASE)
+        )
+
+        for (pattern in patterns) {
+            val match = pattern.find(task)
+            if (match != null) {
+                val potentialAppName = match.groupValues[1].trim()
+                val packageName = packages.getPackageName(potentialAppName)
+                if (packageName != null) {
+                    Log.d(TAG, "从模式匹配提取应用: $potentialAppName -> $packageName")
+                    return packageName
+                }
+            }
+        }
+
+        return null
     }
 
     /**

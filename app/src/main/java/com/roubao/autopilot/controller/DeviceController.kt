@@ -43,6 +43,11 @@ class DeviceController(private val context: Context? = null) {
         ScreenshotManager(::exec, ::getScreenSize)
     }
 
+    // 小窗管理器
+    val freeformManager: FreeformWindowManager by lazy {
+        FreeformWindowManager(context!!, this)
+    }
+
     /** 执行方式 */
     enum class ExecutionMethod {
         A11Y,       // 使用 AccessibilityService

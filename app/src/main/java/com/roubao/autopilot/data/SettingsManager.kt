@@ -94,7 +94,10 @@ data class AppSettings(
     val suCommandEnabled: Boolean = false,
     val useAutoGLMMode: Boolean = true,  // 是否使用 AutoGLM 模式 (默认开启)
     val useGestureNavigation: Boolean = true,  // 是否使用全屏手势导航 (默认开启)
-    val planningConfig: PlanningConfig = PlanningConfig()  // 规划模型配置
+    val planningConfig: PlanningConfig = PlanningConfig(),  // 规划模型配置
+    val mcpServerEnabled: Boolean = false,  // MCP 服务是否启用 (默认关闭)
+    val mcpServerPort: Int = 8765,  // MCP 服务端口
+    val freeformModeEnabled: Boolean = false  // 小窗模式是否启用 (默认关闭)
 ) {
     // 便捷属性：获取当前服务商的配置
     val currentConfig: ProviderConfig
@@ -241,7 +244,10 @@ class SettingsManager(context: Context) {
             suCommandEnabled = prefs.getBoolean("su_command_enabled", false),
             useAutoGLMMode = prefs.getBoolean("use_autoglm_mode", true),
             useGestureNavigation = prefs.getBoolean("use_gesture_navigation", true),
-            planningConfig = planningConfig
+            planningConfig = planningConfig,
+            mcpServerEnabled = prefs.getBoolean("mcp_server_enabled", false),
+            mcpServerPort = prefs.getInt("mcp_server_port", 8765),
+            freeformModeEnabled = prefs.getBoolean("freeform_mode_enabled", false)
         )
     }
 
@@ -438,5 +444,23 @@ class SettingsManager(context: Context) {
             .apply()
         securePrefs.edit().putString("planning_api_key", config.apiKey).apply()
         _settings.value = _settings.value.copy(planningConfig = config)
+    }
+
+    // ========== MCP 服务配置 ==========
+
+    fun updateMCPServerEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("mcp_server_enabled", enabled).apply()
+        _settings.value = _settings.value.copy(mcpServerEnabled = enabled)
+    }
+
+    fun updateMCPServerPort(port: Int) {
+        val validPort = port.coerceIn(1024, 65535)
+        prefs.edit().putInt("mcp_server_port", validPort).apply()
+        _settings.value = _settings.value.copy(mcpServerPort = validPort)
+    }
+
+    fun updateFreeformModeEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("freeform_mode_enabled", enabled).apply()
+        _settings.value = _settings.value.copy(freeformModeEnabled = enabled)
     }
 }
